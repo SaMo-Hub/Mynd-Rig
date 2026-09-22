@@ -6,7 +6,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "frame-ancestors 'self' https://*.vercel.app https://*.framer.app http://localhost:*"
+          "value": "frame-ancestors 'self' https://mynd-rig.vercel.app/ https://*.vercel.app https://*.framer.app http://localhost:*"
         }
       ]
     },
