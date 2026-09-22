@@ -1,0 +1,75 @@
+/* La bulle du sélecteur segmenté — port du `glassEffect(.regular.tint(action)
+   .interactive(), in: .capsule)` d'iOS. Trois couches superposées parce que les
+   trois animations de l'original portent toutes sur `transform` :
+   translation (settle), échelle (grab), écrasement (squash). */
+
+.mynd-pill-track {
+  /* Translation : collée au doigt pendant le glissé, au ressort au lâcher. */
+  transition: transform 0.55s var(--ease-settle);
+}
+
+.mynd-pill-grab {
+  transition: transform 0.5s var(--ease-grab);
+}
+
+.mynd-pill-glass {
+  border-radius: 999px;
+  /* Teinte `action` translucide + flou : le verre d'iOS, qui laisse voir la
+     piste au travers plutôt qu'un aplat posé dessus. */
+  background: color-mix(in srgb, var(--mynd-action) 90%, transparent);
+  backdrop-filter: blur(14px) saturate(1.5);
+  -webkit-backdrop-filter: blur(14px) saturate(1.5);
+  /* Le liseré clair du haut est ce qui fait lire une matière et non un aplat. */
+  /* Ombre volontairement légère : la bulle est un aplat coloré posé sur une
+     piste claire, une ombre marquée l'y détachait trop. */
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.28),
+    0 1px 3px rgb(0 0 0 / 0.06);
+  animation: mynd-pill-squash 0.47s both;
+}
+
+/* Écrasement « jelly » : 0,13 s d'aplatissement (y 0,84 / x 1,10) en courbe
+   cubique, puis retour à 1 en ressort bouncy de 0,34 s — soit 27,7 % / 100 %. */
+@keyframes mynd-pill-squash {
+  0% {
+    transform: scale(1, 1);
+    animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1);
+  }
+  27.7% {
+    transform: scale(1.1, 0.84);
+    animation-timing-function: var(--ease-bouncy);
+  }
+  100% {
+    transform: scale(1, 1);
+  }
+}
+
+/* Reduce Motion : ni agrandissement, ni rebond — comme l'original. */
+@media (prefers-reduced-motion: reduce) {
+  .mynd-pill-glass {
+    animation: none;
+  }
+  .mynd-pill-grab {
+    transform: none !important;
+  }
+}
+
+/* Verre teinté `action` des éléments pleins (bouton flottant de la Home) —
+   même matière que la bulle du sélecteur, sans l'écrasement. */
+.mynd-glass-action {
+  background: color-mix(in srgb, var(--mynd-action) 90%, transparent);
+  backdrop-filter: blur(14px) saturate(1.5);
+  -webkit-backdrop-filter: blur(14px) saturate(1.5);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.32);
+}
+
+/* Verre neutre — la capsule d'outils posée sur la scène et les pastilles qui y
+   flottent. Elle laisse voir le personnage passer dessous. */
+.mynd-glass-bar {
+  background: color-mix(in srgb, var(--mynd-surface) 72%, transparent);
+  backdrop-filter: blur(20px) saturate(1.6);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.28),
+    0 4px 16px rgb(0 0 0 / 0.1);
+}

@@ -1,0 +1,229 @@
+@import "tailwindcss";
+
+/* ============================================================================
+   Design System Mynd — port web du DS de l'app iOS.
+   Source de vérité : `MyndIOS/MyndApp/DESIGN_SYSTEM.md` + `Sources/Theme.swift`.
+   Toute couleur / rayon / police de l'éditeur passe par un token d'ici.
+   Aucune valeur magique dans les composants.
+   ========================================================================= */
+
+/* --- Typographie de marque -------------------------------------------------
+   Google Sans Flex, police **variable** embarquée (axes `wght` 1→1000 et
+   `ROND` 0→100). L'app iOS la rend en variante arrondie via `ROND=100` : on
+   applique exactement le même réglage ici (cf. `MyndFont` dans Theme.swift). */
+@font-face {
+  font-family: "Google Sans Flex";
+  src: url("/fonts/GoogleSansFlex.woff2") format("woff2-variations");
+  font-weight: 100 1000;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* --- Tokens couleur --------------------------------------------------------
+   Deux familles, comme sur iOS :
+   - adaptatifs : une valeur claire, une sombre (suivent le thème) ;
+   - fixes : encres / accents « absolus » qui ne s'inversent jamais.
+   Le thème suit le réglage système, `data-theme` sur <html> permet de forcer
+   l'un ou l'autre (utile ici : on juge le personnage sur les deux fonds). */
+:root {
+  /* adaptatifs — mode clair */
+  --mynd-background: #ffffff;
+  --mynd-surface: #ffffff;
+  --mynd-surface-elevated: #edf0f5;
+  --mynd-panel-row: #0000000d;
+  --mynd-text-primary: #1c1b17;
+  --mynd-ink-soft: #7a766b;
+  --mynd-slate: #263547;
+  --mynd-border: #cecece;
+  --mynd-action: #009dbc;
+  --mynd-cyan-soft: #d2f4fb;
+  --mynd-action-ink: #05837a;
+  --mynd-ink-blue: #5f7b86;
+  --mynd-sky: #defaff;
+  --mynd-destructive: #e5484d;
+  --mynd-text-disabled: #a4a096;
+  --mynd-neutral: #eaeeef;
+  --mynd-neutral-ink: #697274;
+  --mynd-meta-ink: #777777;
+  --mynd-canvas-shadow: #d8dcdd;
+  /* Fond de la scène Pixi. En sombre c'est le « ciel » de l'accueil iOS ; en
+     clair il faut un neutre : le personnage est lui-même cyan et disparaîtrait
+     sur le `sky` (#DEFAFF) de l'app. */
+  --mynd-stage: #edf0f5;
+
+  /* fixes (identiques clair / sombre) */
+  --mynd-ink: #1c1b17;
+  --mynd-cream: #faf7f2;
+  --mynd-mist: #edf0f5;
+  --mynd-cyan: #1ed7e6;
+  --mynd-card-border: #91a8b2;
+  --mynd-device-bezel: #839da8;
+  --mynd-canvas-frame: #7c623d;
+  --mynd-snap-guide: #ff2d78;
+  --mynd-resurface: #ff1a66;
+  --mynd-book-cover: #f30044;
+  --mynd-star: #febc01;
+  --mynd-lavender: #a89cff;
+  --mynd-terracotta: #d88b6a;
+  --mynd-sage: #7fa88b;
+
+  /* rayons (`Radius`) — préfixés pour ne pas boucler sur le namespace
+     `--radius-*` que Tailwind dérive plus bas. */
+  --mynd-radius-sm: 12px;
+  --mynd-radius-card: 16px;
+  --mynd-radius-lg: 20px;
+  --mynd-radius-xl: 24px;
+
+  color-scheme: light dark;
+}
+
+/* Thème sombre « Nuit ardoise » — mêmes valeurs que `Palette` en dark. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --mynd-background: #0f1923;
+    --mynd-surface: #1b2733;
+    --mynd-surface-elevated: #243341;
+    --mynd-panel-row: #ffffff1a;
+    --mynd-text-primary: #eaf0f6;
+    --mynd-ink-soft: #93a1b0;
+    --mynd-slate: #c9d3de;
+    --mynd-border: #3a4654;
+    --mynd-action: #18b8d6;
+    --mynd-cyan-soft: #11343c;
+    --mynd-action-ink: #7fe0d8;
+    --mynd-ink-blue: #93a1b0;
+    --mynd-sky: #102530;
+    --mynd-destructive: #ff6166;
+    --mynd-text-disabled: #5c6b7a;
+    --mynd-neutral: #22303c;
+    --mynd-neutral-ink: #93a1b0;
+    --mynd-meta-ink: #93a1b0;
+    --mynd-canvas-shadow: #070e14;
+    --mynd-stage: #102530;
+  }
+}
+
+:root[data-theme="dark"] {
+  --mynd-background: #0f1923;
+  --mynd-surface: #1b2733;
+  --mynd-surface-elevated: #243341;
+  --mynd-panel-row: #ffffff1a;
+  --mynd-text-primary: #eaf0f6;
+  --mynd-ink-soft: #93a1b0;
+  --mynd-slate: #c9d3de;
+  --mynd-border: #3a4654;
+  --mynd-action: #18b8d6;
+  --mynd-cyan-soft: #11343c;
+  --mynd-action-ink: #7fe0d8;
+  --mynd-ink-blue: #93a1b0;
+  --mynd-sky: #102530;
+  --mynd-destructive: #ff6166;
+  --mynd-text-disabled: #5c6b7a;
+  --mynd-neutral: #22303c;
+  --mynd-neutral-ink: #93a1b0;
+  --mynd-meta-ink: #93a1b0;
+  --mynd-canvas-shadow: #070e14;
+  --mynd-stage: #102530;
+}
+
+/* Exposition à Tailwind. `inline` fait que les utilitaires référencent la
+   variable `--mynd-*` et non sa valeur figée → le thème bascule sans rebuild. */
+@theme inline {
+  --font-sans: "Google Sans Flex", ui-rounded, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  --color-background: var(--mynd-background);
+  --color-surface: var(--mynd-surface);
+  --color-surface-elevated: var(--mynd-surface-elevated);
+  --color-panel-row: var(--mynd-panel-row);
+  --color-text-primary: var(--mynd-text-primary);
+  --color-ink-soft: var(--mynd-ink-soft);
+  --color-slate: var(--mynd-slate);
+  --color-border: var(--mynd-border);
+  --color-action: var(--mynd-action);
+  --color-action-ink: var(--mynd-action-ink);
+  --color-cyan-soft: var(--mynd-cyan-soft);
+  --color-ink-blue: var(--mynd-ink-blue);
+  --color-sky: var(--mynd-sky);
+  --color-destructive: var(--mynd-destructive);
+  --color-text-disabled: var(--mynd-text-disabled);
+  --color-neutral: var(--mynd-neutral);
+  --color-neutral-ink: var(--mynd-neutral-ink);
+  --color-meta-ink: var(--mynd-meta-ink);
+
+  --color-ink: var(--mynd-ink);
+  --color-cream: var(--mynd-cream);
+  --color-mist: var(--mynd-mist);
+  --color-cyan: var(--mynd-cyan);
+  --color-card-border: var(--mynd-card-border);
+  --color-device-bezel: var(--mynd-device-bezel);
+  --color-canvas-frame: var(--mynd-canvas-frame);
+  --color-snap-guide: var(--mynd-snap-guide);
+  --color-resurface: var(--mynd-resurface);
+  --color-book-cover: var(--mynd-book-cover);
+  --color-star: var(--mynd-star);
+  --color-lavender: var(--mynd-lavender);
+  --color-terracotta: var(--mynd-terracotta);
+  --color-sage: var(--mynd-sage);
+
+  --radius-sm: var(--mynd-radius-sm);
+  --radius-card: var(--mynd-radius-card);
+  --radius-lg: var(--mynd-radius-lg);
+  --radius-xl: var(--mynd-radius-xl);
+
+  /* Ombre douce partagée — équivalent de `.cardShadow()` (0.10 / 8 / y2). */
+  --shadow-card: 0 2px 8px rgb(0 0 0 / 0.1);
+  /* Ombre du bouton flottant de la Home (0.14 / 10 / y4). */
+  --shadow-float: 0 4px 10px rgb(0 0 0 / 0.14);
+}
+
+/* --- Ressorts ---------------------------------------------------------------
+   Les animations de l'app sont des `spring(response:dampingFraction:)` SwiftUI,
+   que CSS ne sait pas exprimer. Elles sont échantillonnées ici en courbes
+   `linear()` : le dépassement est le vrai, pas un `cubic-bezier` approchant.
+   Générées depuis la solution analytique d'un ressort amorti. */
+:root {
+  /* spring(response: 0.34, dampingFraction: 0.74) — calage d'un segment. */
+  --ease-settle: linear(0, 0.0284, 0.1, 0.1973, 0.307, 0.4195, 0.5277, 0.6274, 0.7157, 0.7916, 0.8548, 0.906, 0.9462, 0.9766, 0.9988, 1.0141, 1.0238, 1.0292, 1.0314, 1.0312, 1.0294, 1.0266, 1.0232, 1.0197, 1.0162, 1.0129, 1.01, 1.0074, 1.0053, 1.0035, 1.0021, 1.0011, 1.0003, 0.9997, 0.9993, 0.9991, 0.999, 0.999, 0.999, 0.9991, 0.9992);
+  /* spring(response: 0.26, dampingFraction: 0.6) — la bulle qu'on empoigne. */
+  --ease-grab: linear(0, 0.0403, 0.1412, 0.2767, 0.4259, 0.5734, 0.7084, 0.8245, 0.9187, 0.9904, 1.041, 1.0731, 1.0899, 1.0948, 1.091, 1.0814, 1.0686, 1.0544, 1.0404, 1.0276, 1.0166, 1.0077, 1.0009, 0.9961, 0.9931, 0.9915, 0.991, 0.9914, 0.9923, 0.9935, 0.9948, 0.9962, 0.9974, 0.9984, 0.9993, 0.9999, 1.0004, 1.0007, 1.0008, 1.0009, 1.0008);
+  /* `.bouncy` (spring 0.5 / 0.7) — retour de l'écrasement. */
+  --ease-bouncy: linear(0, 0.0108, 0.0403, 0.0841, 0.1387, 0.2009, 0.2677, 0.3371, 0.407, 0.4758, 0.5424, 0.6057, 0.6651, 0.7201, 0.7704, 0.8158, 0.8563, 0.892, 0.9232, 0.9499, 0.9726, 0.9914, 1.0068, 1.0191, 1.0287, 1.0358, 1.0408, 1.044, 1.0456);
+}
+
+/* --- Base ---------------------------------------------------------------- */
+@layer base {
+  html {
+    /* Variante arrondie de la police variable : le `ROND 100` de l'app. */
+    font-variation-settings: "ROND" 100;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-text-primary);
+    font-family: var(--font-sans);
+    /* iOS pose `body { font-weight: 500 }` — même corps de texte ici. */
+    font-weight: 500;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Anneau de focus unique : `action`, comme les champs et sélections iOS. */
+  :focus-visible {
+    outline: 2px solid var(--color-action);
+    outline-offset: 2px;
+  }
+
+  /* Reduce Motion — garde-fou global (le DS l'exige sur toute animation).
+     Posé ici plutôt que composant par composant : il couvre aussi les
+     transitions écrites en style inline, que `motion-reduce:` ne voit pas. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}

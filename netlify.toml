@@ -1,0 +1,16 @@
+# Déploiement Netlify — équivalent de `vercel.json`.
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# `frame-ancestors` remplace `X-Frame-Options` : il autorise l'embed du portfolio
+# et le refuse partout ailleurs. Ajouter ici le domaine réel du portfolio.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "frame-ancestors 'self' https://*.netlify.app http://localhost:*"
+
+[[headers]]
+  for = "/fonts/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

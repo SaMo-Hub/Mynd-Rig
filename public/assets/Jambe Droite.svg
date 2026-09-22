@@ -1,0 +1,26 @@
+<svg width="23" height="144" viewBox="0 0 23 144" fill="none" xmlns="http://www.w3.org/2000/svg">
+<path d="M11.0762 11.0781L11.0762 80.7222L11.0762 132.505" stroke="#7192FF" stroke-width="22.1532" stroke-linecap="round"/>
+<path d="M11.0762 11.0781L11.0762 80.7222L11.0762 132.505" stroke="url(#paint0_linear_1746_1440)" stroke-opacity="0.67" stroke-width="22.1532" stroke-linecap="round"/>
+<path d="M11.0762 11.0781L11.0762 80.7222L11.0762 132.505" stroke="url(#paint1_radial_1746_1440)" stroke-width="22.1532" stroke-linecap="round"/>
+<path d="M11.0762 11.0781L11.0762 80.7222L11.0762 132.505" stroke="url(#paint2_radial_1746_1440)" style="mix-blend-mode:overlay" stroke-width="22.1532" stroke-linecap="round"/>
+<path d="M11.0762 11.0781L11.0762 80.7222L11.0762 132.505" stroke="url(#paint3_radial_1746_1440)" stroke-width="22.1532" stroke-linecap="round"/>
+<path d="M11.0762 11.0781L11.0762 80.7222L11.0762 132.505" stroke="#40DFFF" stroke-width="22.1532" stroke-linecap="round"/>
+<defs>
+<linearGradient id="paint0_linear_1746_1440" x1="33.8123" y1="11.0781" x2="33.8123" y2="92.9065" gradientUnits="userSpaceOnUse">
+<stop stop-color="#00FF44"/>
+<stop offset="1" stop-color="#0077FF"/>
+</linearGradient>
+<radialGradient id="paint1_radial_1746_1440" cx="0" cy="0" r="1" gradientTransform="matrix(2.66639 52.9491 26.9479 -6.67786 34.5748 36.2343)" gradientUnits="userSpaceOnUse">
+<stop stop-color="#00F2FF" stop-opacity="0"/>
+<stop offset="1" stop-color="#00F2FF"/>
+</radialGradient>
+<radialGradient id="paint2_radial_1746_1440" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(33.8123 37.0895) rotate(90) scale(61.287 34.0574)">
+<stop offset="0.49957" stop-color="white" stop-opacity="0"/>
+<stop offset="0.937685" stop-color="white"/>
+</radialGradient>
+<radialGradient id="paint3_radial_1746_1440" cx="0" cy="0" r="1" gradientTransform="matrix(-0.00853259 62.4985 34.7306 0.023333 33.8123 37.0895)" gradientUnits="userSpaceOnUse">
+<stop offset="0.624681" stop-color="white" stop-opacity="0"/>
+<stop offset="0.937685" stop-color="white"/>
+</radialGradient>
+</defs>
+</svg>
