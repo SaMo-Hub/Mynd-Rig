@@ -44,7 +44,7 @@ interface DragState {
 }
 
 /**
- * Couleurs des poignées, tirées des tokens du DS (`index.css`) plutôt que
+ * Couleurs des poifnées, tirées des tokens du DS (`index.css`) plutôt que
  * codées en dur : elles suivent donc la bascule clair/sombre comme le reste de
  * l'éditeur. Relues à chaque changement de thème (cf. `onThemeChange` plus bas).
  */
