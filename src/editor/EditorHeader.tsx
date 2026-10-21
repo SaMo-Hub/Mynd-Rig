@@ -1,9 +1,12 @@
+import { useEffect, useState } from 'react'
 import { useRig } from './useRig'
+import { OPEN_FAILED_EVENT, exportDocument, openDocument } from './documentIO'
 import { MyndWordmark } from '../ui/MyndWordmark'
 import { ThemeToggle } from '../ui/ThemeToggle'
 import { GlassSegmented } from '../ui/GlassSegmented'
 import { Button } from '../ui/Button'
-import { IconDownload, IconPose, IconRig } from '../ui/icons'
+import { mod } from '../ui/keys'
+import { IconDownload, IconPose, IconRedo, IconRig, IconUndo, IconUpload, IconWarning } from '../ui/icons'
 
 /**
  * En-tête, calqué sur `HomeHeader` (app iOS) : le titre du lieu, son sous-titre,
@@ -15,20 +18,30 @@ import { IconDownload, IconPose, IconRig } from '../ui/icons'
  * titre) ; **16** entre le bloc de titre et le sélecteur.
  *
  * Y vivent les décisions qui portent sur le **document** : dans quel mode on
- * l'édite, sous quel thème on le regarde, et son export. Les outils de pose,
- * eux, sont sur la scène.
+ * l'édite, sous quel thème on le regarde, son historique (annuler /
+ * rétablir), son ouverture et son export. Les outils de pose, eux, sont sur la
+ * scène.
  */
 export function EditorHeader() {
   const rig = useRig()
+  const [openFailed, setOpenFailed] = useState(false)
 
-  const exportJSON = () => {
-    const blob = new Blob([rig.toJSON()], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'mynd-animation.json'
-    a.click()
-    URL.revokeObjectURL(url)
+  // L'ouverture peut venir d'ici ou du raccourci : l'échec passe par un événement.
+  useEffect(() => {
+    const onFail = () => setOpenFailed(true)
+    window.addEventListener(OPEN_FAILED_EVENT, onFail)
+    return () => window.removeEventListener(OPEN_FAILED_EVENT, onFail)
+  }, [])
+
+  useEffect(() => {
+    if (!openFailed) return
+    const id = window.setTimeout(() => setOpenFailed(false), 5000)
+    return () => window.clearTimeout(id)
+  }, [openFailed])
+
+  const open = () => {
+    setOpenFailed(false)
+    void openDocument()
   }
 
   return (
@@ -46,9 +59,43 @@ export function EditorHeader() {
         </p>
       </div>
 
+      {/* L'historique vit près du titre du document, comme dans un éditeur de
+          texte — et, dans un cadre étroit, sur la ligne du logo : c'est là
+          qu'il reste de la place quand les contrôles passent à la ligne. */}
+      <div className="flex items-center max-sm:ml-auto">
+        <Button
+          variant="ghost"
+          size="icon"
+          disabled={!rig.canUndo}
+          onClick={() => rig.undo()}
+          title={`Annuler (${mod('Z')})`}
+          aria-label="Annuler"
+        >
+          <IconUndo />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          disabled={!rig.canRedo}
+          onClick={() => rig.redo()}
+          title={`Rétablir (⇧${mod('Z')})`}
+          aria-label="Rétablir"
+        >
+          <IconRedo />
+        </Button>
+      </div>
+
       <div className="ml-auto flex items-center gap-2 md:gap-3">
+        {openFailed && (
+          // Icône + texte : jamais la couleur seule. Annoncé aux lecteurs d'écran.
+          <p role="status" className="flex items-center gap-1.5 text-[13px] font-semibold text-destructive">
+            <IconWarning className="h-4 w-4 shrink-0" />
+            <span className="max-md:hidden">Ce fichier n’est pas une animation Mynd</span>
+          </p>
+        )}
+
         <GlassSegmented
-          className="w-[184px] md:w-[248px]"
+          className="w-[168px] sm:w-[184px] md:w-[248px]"
           label="Mode d’édition"
           value={rig.mode}
           onChange={(m) => rig.setMode(m)}
@@ -71,9 +118,19 @@ export function EditorHeader() {
         <ThemeToggle />
 
         <Button
+          variant="ghost"
+          size="icon"
+          onClick={open}
+          title={`Ouvrir une animation exportée (${mod('O')})`}
+          aria-label="Ouvrir"
+        >
+          <IconUpload />
+        </Button>
+
+        <Button
           variant="primary"
-          onClick={exportJSON}
-          title="Exporter l’animation en JSON"
+          onClick={exportDocument}
+          title={`Exporter l’animation en JSON (${mod('S')})`}
           aria-label="Sauvegarder"
           className="!px-4 md:!px-[18px]"
         >

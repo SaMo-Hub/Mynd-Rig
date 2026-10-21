@@ -97,6 +97,15 @@ function measureInsets(host: HTMLElement) {
   return { top: read('top'), bottom: read('bottom') }
 }
 
+/**
+ * Rayon de prise des poignées, en pixels écran — bien plus large que leur
+ * dessin (7 à 11 px). Au doigt, la cible fait ~56 px de diamètre (≥ 44 pt).
+ */
+const HIT_R_MOUSE = 20
+const HIT_R_TOUCH = 28
+/** Grossissement de la poignée survolée : on voit ce qu'on va attraper. */
+const HOVER_GROW = 2.5
+
 /** Assombrissement des membres passant derrière le corps (voir `depthSort`). */
 const FAR_SHADE = 0.62
 
@@ -248,20 +257,45 @@ export function RigCanvas() {
         app.stage.addChild(handleLayer)
 
         let drag: DragState | null = null
+        /** Poignée sous la souris (survol), dessinée un peu plus grosse. */
+        let hovered: Handle | null = null
         const handles: Handle[] = []
+        // Les poignées ne testent pas le clic elles-mêmes : Pixi le teste sur
+        // la géométrie dessinée, si bien qu'un anneau (corps, regard) ne se
+        // prenait que par son trait, et qu'une pastille de 9 px était une
+        // cible minuscule. C'est la scène qui choisit la poignée la plus
+        // proche du pointeur, dans un rayon généreux (`pickHandle`).
         const addHandle = (id: string, type: HandleType, key?: string) => {
           const gfx = new Graphics()
-          gfx.eventMode = 'static'
-          gfx.cursor = 'grab'
+          gfx.eventMode = 'none'
           handleLayer.addChild(gfx)
           const h: Handle = { id, type, key, gfx }
           handles.push(h)
-          gfx.on('pointerdown', (e: FederatedPointerEvent) => {
-            e.stopPropagation()
-            drag = { handle: h, last: e.global.clone(), grabOffset: grabOffsetFor(h, e.global) }
-            rigStore.select(key ?? null)
-          })
           return h
+        }
+
+        /**
+         * La poignée visible la plus proche de `g`, à moins de `radius` px.
+         * La plus proche, et non la première trouvée : deux zones de prise
+         * élargies se chevauchent (une main posée sur le ventre, par exemple).
+         */
+        const pickHandle = (g: Point, radius: number): Handle | null => {
+          let best: Handle | null = null
+          let bestD = radius
+          for (const h of handles) {
+            if (!h.gfx.visible) continue
+            const d = Math.hypot(h.gfx.position.x - g.x, h.gfx.position.y - g.y)
+            if (d <= bestD) {
+              bestD = d
+              best = h
+            }
+          }
+          return best
+        }
+        const hitRadius = (e: FederatedPointerEvent) =>
+          e.pointerType === 'touch' || e.pointerType === 'pen' ? HIT_R_TOUCH : HIT_R_MOUSE
+        const setCursor = (c: string) => {
+          if (app.canvas.style.cursor !== c) app.canvas.style.cursor = c
         }
         LIMBS.forEach((l) => addHandle(`tip-${l.key}`, 'tip', l.key))
         LIMBS.forEach((l) => addHandle(`anchor-${l.key}`, 'anchor', l.key))
@@ -280,7 +314,21 @@ export function RigCanvas() {
         // --- Drag global ---
         app.stage.eventMode = 'static'
         app.stage.hitArea = app.screen
-        app.stage.on('pointerdown', () => rigStore.select(null))
+        app.stage.on('pointerdown', (e: FederatedPointerEvent) => {
+          const h = pickHandle(e.global, hitRadius(e))
+          if (!h) {
+            rigStore.select(null)
+            return
+          }
+          // Un glissé = un pas d'annulation ; il arrête la lecture et, en
+          // auto-keyframe, aligne le playhead sur la grille. Avant de lire
+          // l'angle de départ : la pose peut être rééchantillonnée.
+          rigStore.beginGesture(h.type !== 'anchor')
+          drag = { handle: h, last: e.global.clone(), grabOffset: grabOffsetFor(h, e.global) }
+          rigStore.select(h.key ?? null)
+          hovered = h
+          setCursor('grabbing')
+        })
         app.stage.on('pointermove', (e: FederatedPointerEvent) => {
           if (!drag) return
           const { handle } = drag
@@ -301,12 +349,23 @@ export function RigCanvas() {
         })
         // Suivi du curseur (quand activé et qu'on ne drague pas une poignée).
         app.stage.on('globalpointermove', (e: FederatedPointerEvent) => {
+          // Survol à la souris : la poignée qu'un clic attraperait.
+          if (!drag && e.pointerType === 'mouse') {
+            hovered = pickHandle(e.global, HIT_R_MOUSE)
+            setCursor(hovered ? 'grab' : 'default')
+          }
           if (!rigStore.followGaze || drag) return
           const local = character.toLocal(e.global)
-          rigStore.setGaze(local.x - EYE_MID.x, local.y - EYE_MID.y)
+          rigStore.followGazeTo(local.x - EYE_MID.x, local.y - EYE_MID.y)
         })
-        app.stage.on('pointerup', () => (drag = null))
-        app.stage.on('pointerupoutside', () => (drag = null))
+        const endDrag = (e: FederatedPointerEvent) => {
+          drag = null
+          // Au doigt il n'y a pas de survol : la poignée ne reste pas grossie.
+          hovered = e.pointerType === 'mouse' ? pickHandle(e.global, HIT_R_MOUSE) : null
+          setCursor(hovered ? 'grab' : 'default')
+        }
+        app.stage.on('pointerup', endDrag)
+        app.stage.on('pointerupoutside', endDrag)
 
         // --- Layout ---
         let scale = 1
@@ -337,6 +396,13 @@ export function RigCanvas() {
               const g = character.toGlobal(new Point(t.x, t.y))
               const r = app.canvas.getBoundingClientRect()
               return { x: r.left + g.x, y: r.top + g.y }
+            },
+            /** Position écran d'une poignée (`body-move`, `gaze`, `tip-arm-left`…). */
+            handleClient(id: string) {
+              const h = handles.find((x) => x.id === id)
+              if (!h) return null
+              const r = app.canvas.getBoundingClientRect()
+              return { x: r.left + h.gfx.position.x, y: r.top + h.gfx.position.y }
             },
           }
         }
@@ -455,12 +521,14 @@ export function RigCanvas() {
             const g = character.toGlobal(new Point(lx, ly))
             h.gfx.position.set(g.x, g.y)
             const isSel = h.key && rigStore.selected === h.key
-            if (h.type === 'tip') drawHandle(h.gfx, isSel ? colors.selected : colors.tip, isSel ? 11 : 9)
+            const grow = h === hovered ? HOVER_GROW : 0
+            if (h.type === 'tip')
+              drawHandle(h.gfx, isSel ? colors.selected : colors.tip, (isSel ? 11 : 9) + grow)
             else if (h.type === 'anchor')
-              drawHandle(h.gfx, isSel ? colors.selected : colors.anchor, isSel ? 11 : 9)
-            else if (h.type === 'body-move') drawHandle(h.gfx, colors.body, 10, true)
-            else if (h.type === 'body-rot') drawHandle(h.gfx, colors.body, 7)
-            else if (h.type === 'gaze') drawHandle(h.gfx, colors.gaze, 8, true)
+              drawHandle(h.gfx, isSel ? colors.selected : colors.anchor, (isSel ? 11 : 9) + grow)
+            else if (h.type === 'body-move') drawHandle(h.gfx, colors.body, 10 + grow, true)
+            else if (h.type === 'body-rot') drawHandle(h.gfx, colors.body, 7 + grow)
+            else if (h.type === 'gaze') drawHandle(h.gfx, colors.gaze, 8 + grow, true)
           }
         })
       })

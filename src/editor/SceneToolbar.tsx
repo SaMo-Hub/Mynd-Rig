@@ -36,11 +36,21 @@ export function SceneToolbar() {
         <Button
           variant="ghost"
           onClick={() => rig.addKeyframe()}
-          title="Enregistrer la pose actuelle à l’instant du playhead"
-          aria-label="Ajouter une keyframe"
+          title={
+            rig.poseDirty
+              ? 'Pose modifiée, pas encore enregistrée — l’enregistrer au playhead (K)'
+              : 'Enregistrer la pose actuelle à l’instant du playhead (K)'
+          }
+          aria-label={rig.poseDirty ? 'Ajouter une keyframe (pose non enregistrée)' : 'Ajouter une keyframe'}
+          className="relative"
         >
           <IconKeyframe />
           <span className="hidden md:inline">Keyframe</span>
+          {/* Pose non enregistrée : la pastille dit que le prochain
+              déplacement du playhead la perdra. */}
+          {rig.poseDirty && (
+            <span aria-hidden className="absolute right-2 top-1.5 h-2 w-2 rounded-full bg-star ring-2 ring-surface" />
+          )}
         </Button>
         <Button
           variant="ghost"

@@ -2,8 +2,9 @@ import { useRig } from './useRig'
 import { LIMB_BY_KEY } from '../rig/rigData'
 
 /**
- * Indice posé sur la scène : ce qui est sélectionné, ou le geste à faire quand
- * rien ne l'est.
+ * Indice posé sur la scène, par ordre de priorité : une pose modifiée qui n'est
+ * pas enregistrée (le prochain déplacement du playhead la perdrait),
+ * l'auto-keyframe en marche, ce qui est sélectionné, ou le geste à faire.
  *
  * Il vivait dans la barre d'outils, qu'il faisait passer sur deux lignes sur un
  * écran d'ordinateur portable. Sa place est ici : il parle de ce qu'on a sous
@@ -21,7 +22,17 @@ export function SceneHint() {
                  max-w-[min(28rem,calc(100%-2.5rem))] rounded-full px-4 py-2
                  text-[13px] font-medium text-ink-soft"
     >
-      {rig.selected ? (
+      {rig.poseDirty ? (
+        <>
+          <span className="font-semibold text-text-primary">Pose non enregistrée</span> — K pour
+          la garder
+        </>
+      ) : rig.autoKey && rig.mode === 'pose' ? (
+        <>
+          <span className="font-semibold text-destructive">Auto-keyframe</span> — chaque geste
+          s’enregistre au playhead
+        </>
+      ) : rig.selected ? (
         <>
           Sélection :{' '}
           <span className="font-semibold text-text-primary">

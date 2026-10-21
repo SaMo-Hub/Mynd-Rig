@@ -15,10 +15,26 @@
  * segment sélectionné sur iOS.
  */
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost'
-export type ButtonSize = 'regular' | 'compact'
+export type ButtonSize = 'regular' | 'compact' | 'icon'
+/**
+ * Rendu de l'état plein (`primary` / `active`) :
+ * - `action` : l'aplat cyan du CTA ;
+ * - `destructive` : aplat rouge — l'enregistrement (auto-keyframe) ;
+ * - `soft` : lavis `cyanSoft` — une **option** allumée (boucle, étirer), qui ne
+ *   doit pas se lire comme une seconde action principale à côté de « Lire ».
+ */
+export type ButtonTone = 'action' | 'destructive' | 'soft'
+
+const VARIANT_PRIMARY = 'bg-action text-mist'
+
+const TONE_SOLID: Record<ButtonTone, string> = {
+  action: `${VARIANT_PRIMARY} hover:brightness-110`,
+  destructive: 'bg-destructive text-cream hover:brightness-110',
+  soft: 'bg-cyan-soft text-action-ink hover:brightness-95',
+}
 
 const VARIANT: Record<ButtonVariant, string> = {
-  primary: 'bg-action text-mist',
+  primary: VARIANT_PRIMARY,
   secondary: 'border-2 border-border text-action',
   ghost: 'text-ink-blue hover:bg-panel-row',
 }
@@ -38,12 +54,15 @@ const VARIANT_HOVER: Record<ButtonVariant, string> = {
 const SIZE: Record<ButtonSize, string> = {
   regular: 'w-full px-10 py-3.5 text-[18px]',
   compact: 'px-[18px] py-[9px] text-[15px]',
+  // Icône seule, dans une barre dense (la timeline) : cible carrée de 44 px.
+  icon: 'h-11 w-11 shrink-0 p-0 text-[15px]',
 }
 
 export function Button({
   variant = 'secondary',
   size = 'compact',
   active = false,
+  tone = 'action',
   disabled = false,
   className = '',
   children,
@@ -52,6 +71,7 @@ export function Button({
   variant?: ButtonVariant
   size?: ButtonSize
   active?: boolean
+  tone?: ButtonTone
   } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
   // Un contrôle « en marche » se lit comme un CTA : même apparence que primary.
   const v: ButtonVariant = active ? 'primary' : variant
@@ -69,7 +89,11 @@ export function Button({
         'transition duration-[120ms] ease-out motion-reduce:transition-none ' +
         (disabled ? 'cursor-not-allowed ' : 'active:scale-[0.98] ') +
         SIZE[size] + ' ' +
-        (disabled ? VARIANT_DISABLED[v] : `${VARIANT[v]} ${VARIANT_HOVER[v]}`) + ' ' +
+        (disabled
+          ? VARIANT_DISABLED[v]
+          : v === 'primary'
+            ? TONE_SOLID[tone]
+            : `${VARIANT[v]} ${VARIANT_HOVER[v]}`) + ' ' +
         className
       }
     >

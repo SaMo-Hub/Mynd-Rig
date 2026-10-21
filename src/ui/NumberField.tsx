@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react'
+
 /**
  * Champ numérique compact, sur le modèle du **champ de recherche de la Home**
  * (`HomeHeader.searchField`) et non du champ de formulaire : une **pilule
@@ -6,26 +8,46 @@
  *
  * Le contour permanent de `MyndTextField` reste réservé aux vrais formulaires
  * plein écran, qu'on n'a pas ici.
+ *
+ * La saisie au clavier n'est **validée** qu'à `Entrée` ou à la sortie du champ
+ * (`Échap` l'annule) : appliquée à chaque touche, « 25 » passait par « 2 », et
+ * une valeur intermédiaire suffit à bouger — voire fusionner — des keyframes.
+ * Les flèches et les boutons du champ, eux, appliquent tout de suite.
  */
 export function NumberField({
   label,
   value,
   min,
+  max,
   step,
   suffix,
   onChange,
   className = '',
+  title,
 }: {
   label: string
   value: number
   min?: number
+  max?: number
   step?: number
   suffix?: string
   onChange: (v: number) => void
   className?: string
+  title?: string
 }) {
+  const [draft, setDraft] = useState<string | null>(null)
+
+  // Valeur changée de l'extérieur : on abandonne la saisie en cours.
+  useEffect(() => setDraft(null), [value])
+
+  const commit = (text: string) => {
+    setDraft(null)
+    const v = parseFloat(text)
+    if (Number.isFinite(v) && v !== value) onChange(v)
+  }
+
   return (
-    <label className={'flex items-center gap-2 ' + className}>
+    <label className={'flex shrink-0 items-center gap-2 ' + className} title={title}>
       <span className="text-[13px] font-semibold text-ink-soft">{label}</span>
       <span
         className="flex h-11 items-center gap-1 rounded-full bg-surface-elevated px-4
@@ -34,10 +56,23 @@ export function NumberField({
       >
         <input
           type="number"
+          inputMode="decimal"
           min={min}
+          max={max}
           step={step}
-          value={value}
-          onChange={(e) => onChange(parseFloat(e.target.value) || (min ?? 0))}
+          value={draft ?? String(value)}
+          onChange={(e) => {
+            // Flèches / boutons du champ : pas d'`inputType` → application
+            // immédiate. Frappe : brouillon, validé plus tard.
+            const typed = (e.nativeEvent as InputEvent).inputType !== undefined
+            if (typed) setDraft(e.target.value)
+            else commit(e.target.value)
+          }}
+          onBlur={(e) => draft !== null && commit(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commit((e.target as HTMLInputElement).value)
+            else if (e.key === 'Escape') setDraft(null)
+          }}
           className="w-12 bg-transparent text-[15px] font-semibold text-text-primary outline-none"
         />
         {suffix && <span className="text-[13px] text-ink-soft">{suffix}</span>}

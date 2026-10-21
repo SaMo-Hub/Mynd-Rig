@@ -50,10 +50,10 @@ L'app est un **éditeur de rig + animation** (poser, rigger, timeline, export).
   (256×279, = viewBox de `mascot-final.svg`). Les membres sont à **2 os (IK)**.
 - `src/editor/rigStore.ts` — store d'état vanilla (singleton `rigStore`). Modèle de
   pose **basé sur la cible d'extrémité** (main/pied en coords locales), pas sur des
-  rotations. Contient aussi anchors, keyframes, lecture, interpolation, export JSON.
-  Pixi lit la pose en direct ; React ne s'abonne qu'aux changements structurels
-  (via `src/editor/useRig.ts` + `useSyncExternalStore`). Exposé sur `window.__rig`
-  en dev.
+  rotations. Contient aussi anchors, keyframes, lecture, interpolation, historique,
+  export / ouverture JSON. Pixi lit la pose en direct ; React ne s'abonne qu'aux
+  changements structurels (via `src/editor/useRig.ts` + `useSyncExternalStore`).
+  Exposé sur `window.__rig` en dev. Voir « Timeline et keyframes » plus bas.
 - `src/editor/RigCanvas.tsx` — rendu Pixi. Membres **procéduraux** : `solveIK`
   (2 os égaux) place le genou/coude, dessiné en capsule à jointure arrondie
   (`stroke` cap/join `round`, couleur unie = SVG d'origine). Corps + visage =
@@ -61,22 +61,35 @@ L'app est un **éditeur de rig + animation** (poser, rigger, timeline, export).
   `backLimbs` (sous le corps, défaut) et `frontLimbs` (au-dessus du corps mais
   sous le visage) : voir le tri par profondeur en vue de profil plus bas. Poignées interactives en coords écran
   (taille constante), reprojetées chaque frame via `character.toGlobal`.
+  ⚠️ Les poignées ne testent **pas** le clic elles-mêmes (`eventMode = 'none'`) :
+  Pixi teste sur la géométrie dessinée, donc un anneau ne se prenait que par son
+  trait et une pastille de 9 px était une cible minuscule. C'est la scène qui
+  prend **la poignée la plus proche** du pointeur (`pickHandle`), dans
+  `HIT_R_MOUSE` (20 px) ou `HIT_R_TOUCH` (28 px) ; la poignée survolée grossit.
 - **Découpage de la page** (refonte sur la DA de l'accueil iOS) : `App.tsx` pose
   quatre zones en cartes arrondies posées sur le fond, sans bandeaux ni bordures.
   Le contenu est rangé par sujet, pas par commodité :
-  - `src/editor/EditorHeader.tsx` — identité, mode d'édition, thème, export
-    (tout ce qui porte sur le **document**) ;
+  - `src/editor/EditorHeader.tsx` — identité, annuler / rétablir, mode
+    d'édition, thème, ouvrir, exporter (tout ce qui porte sur le **document**) ;
   - `src/editor/SceneToolbar.tsx` — outils de **pose**, en capsule de verre
     flottant sur la scène (pattern de la barre d'action de l'éditeur iOS) ;
   - `src/editor/Timeline.tsx` — le **temps** : transport (le bouton rond
-    `action`), durée, règle, keyframes, playhead en rAF ;
+    `action`), auto-keyframe, boucle, durée, actions de la sélection, zoom,
+    playhead en rAF. La piste et ses gestes sont dans `TimelineTrack.tsx`, les
+    menus (interpolation, contextuel, raccourcis) dans `KeyframeMenus.tsx` ;
   - `src/editor/ArticulationPanel.tsx` — les **réglages**.
 - `src/ui/` — **le design system** (voir la section dédiée plus bas) : `Button`,
-  `GlassSegmented`, `IconButton`, `Slider`, `Checkbox`, `NumberField`,
-  `ThemeToggle`, `icons.tsx`, `MyndWordmark`, et `theme.ts` (lecture des tokens
-  CSS par Pixi).
-- `src/editor/SceneHint.tsx` — indice posé en bas de la scène (sélection
-  courante, ou geste à faire). Il était dans la `Toolbar`, qu'il faisait passer
+  `GlassSegmented`, `IconButton`, `Slider`, `Checkbox`, `NumberField`, `Menu`
+  (`usePopover` + `MenuSurface` / `MenuItem` : **tous** les popovers passent par
+  là), `ThemeToggle`, `icons.tsx`, `keys.ts` (libellés ⌘ / Ctrl),
+  `MyndWordmark`, et `theme.ts` (lecture des tokens CSS par Pixi).
+- `src/editor/useShortcuts.ts` — raccourcis clavier, et la table `SHORTCUTS`
+  affichée dans l'aide (logique et aide au même endroit, pour ne pas diverger).
+- `src/editor/documentIO.ts` — export, ouverture d'un export, **sauvegarde
+  automatique** en `localStorage` (restaurée au démarrage dans `main.tsx`).
+  Tout accès au stockage est en `try/catch` : iframe tierce, navigation privée.
+- `src/editor/SceneHint.tsx` — indice posé en haut de la scène (pose non
+  enregistrée, auto-keyframe en marche, sélection courante, ou geste à faire). Il était dans la `Toolbar`, qu'il faisait passer
   sur deux lignes sur un écran de portable ; il parle de la scène, pas des
   outils.
 - `src/editor/AnimationMenu.tsx` — popover « Animations » : charge un preset
@@ -106,9 +119,9 @@ Quatre presets — **Repos**, **Marche**, **Course**, **Saut** — définis comm
 **fonctions** `sample(t, ctx)` et non comme des keyframes figées : les cycles
 sont bouclés par construction et les amplitudes se règlent en un chiffre.
 `rigStore.loadAnimation(def)` les échantillonne en `samples + 1` keyframes
-éditables (l'interpolation de la timeline étant linéaire, la fluidité vient de
-la densité), applique le `style` d'articulation du preset et remplace les
-keyframes existantes.
+éditables en interpolation `linear` (la fluidité vient de la densité), applique
+le `style` d'articulation du preset et remplace les keyframes existantes —
+annulable comme tout le reste.
 
 Conventions du modèle (invariants à respecter si on ajoute une animation) :
 
@@ -186,6 +199,55 @@ Comportements clés :
   membres), `Bras */Jambe *.svg` (pièces d'origine, désormais non chargées — le
   rendu des membres est procédural).
 
+## Timeline et keyframes
+
+Tout vit dans `rigStore` ; les composants ne font qu'appeler ses méthodes.
+
+- **Grille d'images** : `FPS = 24`. Keyframes posées, déplacées, collées et
+  playhead manipulé sont calés sur `snapToFrame` ; la lecture reste continue.
+  Deux keyframes à moins d'une demi-image sont **la même** : une keyframe
+  déplacée ou collée sur une autre la remplace (`mergeSelected`).
+- **Interpolation par keyframe** (`interp`, segment qui *part* de la keyframe) :
+  `smooth` (défaut des keyframes posées à la main : Hermite à tangentes
+  Catmull-Rom, annulées aux extrêmes et bridées façon Fritsch-Carlson → **pas de
+  dépassement**, sinon une extrémité sortirait de sa portée et `solveIK`
+  clamperait en silence), `linear` (presets, anciens exports), `ease`, `hold`.
+  Forme du repère dans la piste = convention After Effects (cercle, losange,
+  sablier, carré) ; la couleur ne dit que la sélection.
+- **Auto-keyframe** (`autoKey`, touche N) : toute édition de la pose passe par
+  `poseEdited()`, qui écrit la keyframe au playhead. Hors auto-key, une pose
+  modifiée alors que des keyframes existent est `poseDirty` (pastille sur le
+  bouton Keyframe + indice de scène) : le prochain déplacement du playhead la
+  perdrait. Le regard qui **suit le curseur** passe par `followGazeTo`, qui
+  n'est pas une édition — sinon le survol remplirait la timeline.
+- **Historique** : `checkpoint(tag?)` **avant** chaque modification du document
+  (même tag rapproché = un seul pas : curseurs, flèches). Un glissé sur la scène
+  = un pas, préparé par `beginGesture` et versé au **premier vrai changement**
+  (un clic sans bouger ne crée pas de pas vide). Toute nouvelle méthode qui
+  modifie keyframes, durée, pose, attaches ou style **doit** poser son
+  checkpoint.
+- **Durée** : sans « Étirer », elle ne descend pas sous la dernière keyframe
+  (rien n'est coupé en silence) ; avec, les keyframes suivent à l'échelle.
+- **Piste** : la règle (haut) sert à parcourir le temps, le couloir (bas) aux
+  keyframes — clic, ⇧/⌘+clic, glisser (Alt = dupliquer), lasso, clic droit ou
+  appui long (le menu s'ouvre alors **au-dessus** du doigt et le clic de
+  relâchement est avalé, sinon il le refermait). Zoom : ⌘/Ctrl + molette,
+  plafonné à `MAX_FRAME_PX` par image.
+- **L'en-tête de la timeline tient sur une ligne à hauteur fixe** : il change de
+  contenu avec la sélection, et s'il passait sur deux lignes la scène se
+  redimensionnerait à chaque clic. Les commandes secondaires se replient par
+  paliers (`max-lg:hidden`…) et restent au clavier et dans le menu contextuel.
+  Pour masquer un `Button` / `NumberField` selon la largeur, utiliser
+  `max-*:hidden` et non `hidden md:inline-flex` : leur `display` de base
+  entrerait en conflit.
+- **`NumberField` valide au blur / Entrée** (Échap annule), les flèches tout de
+  suite : appliquée à chaque frappe, « 25 » passait par « 2 » et une valeur
+  intermédiaire suffisait à bouger ou fusionner des keyframes.
+- **Format d'export** : `{ format: 'mynd-rig', version: 2, fps, duration, loop,
+  anchors, limbStyle, styleLinked, depthSort, keyframes: [{ time, interp, pose }] }`.
+  `loadJSON` accepte l'ancien format (sans `interp` → `linear`) et refuse sans
+  rien toucher ce qui n'est pas une animation.
+
 ## Design system — partagé avec l'app iOS
 
 L'éditeur reprend **le DS de l'app Mynd iOS**, pour que le site et l'app aient la
@@ -216,7 +278,11 @@ et `MyndApp/Sources/Theme.swift` — s'y référer avant d'inventer un style, et
   `regular`/`compact`, ≥ 44 px, plus `active` pour l'état « en marche » d'un
   outil), **`GlassSegmented`** (ci-dessous), `IconButton` (les deux boutons ronds
   de la Home : `outline` = la recherche, `action` = le « + » flottant en verre
-  teinté), `Slider` (= `PanelSlider` : piste 6, poignée pilule 22 × 10 blanche),
+  teinté), `Slider` (libellé + valeur au-dessus de **`FluidSlider`**, copie à plat du
+  `UISlider` d'iOS 26 : ressorts d'appui/relâche, inertie au lâcher, élastique
+  en bout de course, tout en rAF sans rendu React ; il ne rappelle `onChange` que
+  pour un geste de l'utilisateur — un `value` changé de l'extérieur fait glisser
+  le pouce sans renvoyer les valeurs intermédiaires au store),
   `Checkbox` (= `NotesCheckbox` : remplissage qui « pop », coche qui se trace,
   décochage sec), `NumberField` (pilule pleine, sur le modèle du champ de
   recherche de la Home ; le contour 2 px de `MyndTextField` est réservé aux
@@ -234,7 +300,11 @@ et `MyndApp/Sources/Theme.swift` — s'y référer avant d'inventer un style, et
   (`--ease-settle`, `--ease-grab`, `--ease-bouncy` dans `index.css`), ce qui
   restitue le vrai dépassement plutôt qu'un `cubic-bezier` approchant.
 - **Hiérarchie** : une seule action accentuée par zone — `Sauvegarder` dans
-  l'en-tête, `Lire` dans la timeline ; tous les outils sont en `ghost`.
+  l'en-tête, `Lire` dans la timeline ; tous les outils sont en `ghost`. Un
+  outil allumé prend l'aplat `primary` (`active`) ; une **option** allumée
+  (boucle, étirer) prend `tone="soft"` (lavis `cyanSoft`), sinon une option
+  active par défaut fait un second CTA ; l'auto-keyframe allumé prend
+  `tone="destructive"` (le rouge d'enregistrement).
 - **Pas d'emoji dans l'interface** : un emoji ne prend pas `currentColor` (il ne
   suit ni le thème ni l'état du bouton) et change de dessin d'un OS à l'autre.
   Toutes les icônes sont des tracés de `src/ui/icons.tsx`, en bouts **arrondis**

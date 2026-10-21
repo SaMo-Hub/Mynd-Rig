@@ -4,6 +4,7 @@ import { SceneToolbar } from './editor/SceneToolbar'
 import { SceneHint } from './editor/SceneHint'
 import { ArticulationPanel } from './editor/ArticulationPanel'
 import { EditorHeader } from './editor/EditorHeader'
+import { useShortcuts } from './editor/useShortcuts'
 
 /**
  * Éditeur de rig, dessiné sur la DA de l'accueil de l'app Mynd.
@@ -23,6 +24,8 @@ import { EditorHeader } from './editor/EditorHeader'
  * - les **réglages** d'articulation dans leur propre carte.
  */
 function App() {
+  useShortcuts()
+
   return (
     <div className="flex h-screen flex-col gap-4 overflow-hidden bg-background p-5">
       <EditorHeader />

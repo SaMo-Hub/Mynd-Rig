@@ -191,6 +191,14 @@
   --ease-bouncy: linear(0, 0.0108, 0.0403, 0.0841, 0.1387, 0.2009, 0.2677, 0.3371, 0.407, 0.4758, 0.5424, 0.6057, 0.6651, 0.7201, 0.7704, 0.8158, 0.8563, 0.892, 0.9232, 0.9499, 0.9726, 0.9914, 1.0068, 1.0191, 1.0287, 1.0358, 1.0408, 1.044, 1.0456);
 }
 
+/* --- Défilement horizontal de la timeline zoomée ---------------------------
+   Barre fine, dans la couleur des lavis : elle signale qu'on peut défiler sans
+   poser un trait sous la piste. */
+.mynd-scroll-x {
+  scrollbar-width: thin;
+  scrollbar-color: var(--mynd-border) transparent;
+}
+
 /* --- Base ---------------------------------------------------------------- */
 @layer base {
   html {
