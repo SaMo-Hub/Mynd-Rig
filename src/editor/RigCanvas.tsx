@@ -299,9 +299,11 @@ export function RigCanvas() {
         }
         LIMBS.forEach((l) => addHandle(`tip-${l.key}`, 'tip', l.key))
         LIMBS.forEach((l) => addHandle(`anchor-${l.key}`, 'anchor', l.key))
-        addHandle('body-move', 'body-move')
-        addHandle('body-rot', 'body-rot')
-        addHandle('gaze', 'gaze')
+        // Le corps et le regard sont des éléments sélectionnables, comme les
+        // membres : leur `key` est l'identifiant de leur piste (`tracks.ts`).
+        addHandle('body-move', 'body-move', 'body')
+        addHandle('body-rot', 'body-rot', 'body')
+        addHandle('gaze', 'gaze', 'gaze')
 
         function grabOffsetFor(h: Handle, g: Point): number {
           if (h.type === 'body-rot') {
@@ -452,16 +454,16 @@ export function RigCanvas() {
           for (const l of LIMBS) {
             const A = rigStore.anchors[l.key]
             const T = pose.targets[l.key]
-            const style = rigStore.limbStyle[l.key]
-            const bendRad = (style.bendDeg * Math.PI) / 180
+            const shape = pose.shape[l.key]
+            const bendRad = (shape.bendDeg * Math.PI) / 180
             const { K, T: Tk } = solveIK(
               A,
               T,
               segLength(l),
               l.bend,
-              style.curve,
+              shape.curve,
               bendRad,
-              style.stretch,
+              rigStore.stretch[l.key],
             )
             // Courbe lisse sur TOUTE la longueur (pas de coude) : Bézier
             // quadratique dont le point de contrôle est placé pour que le milieu
@@ -526,9 +528,12 @@ export function RigCanvas() {
               drawHandle(h.gfx, isSel ? colors.selected : colors.tip, (isSel ? 11 : 9) + grow)
             else if (h.type === 'anchor')
               drawHandle(h.gfx, isSel ? colors.selected : colors.anchor, (isSel ? 11 : 9) + grow)
-            else if (h.type === 'body-move') drawHandle(h.gfx, colors.body, 10 + grow, true)
-            else if (h.type === 'body-rot') drawHandle(h.gfx, colors.body, 7 + grow)
-            else if (h.type === 'gaze') drawHandle(h.gfx, colors.gaze, 8 + grow, true)
+            else if (h.type === 'body-move')
+              drawHandle(h.gfx, isSel ? colors.selected : colors.body, 10 + grow, true)
+            else if (h.type === 'body-rot')
+              drawHandle(h.gfx, isSel ? colors.selected : colors.body, 7 + grow)
+            else if (h.type === 'gaze')
+              drawHandle(h.gfx, isSel ? colors.selected : colors.gaze, 8 + grow, true)
           }
         })
       })

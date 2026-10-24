@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useRig } from './useRig'
 import { FPS, rigStore } from './rigStore'
-import { TimelineTrack } from './TimelineTrack'
+import { LABEL_W, TimelineTrack } from './TimelineTrack'
 import { InterpMenu, ShortcutsHelp } from './KeyframeMenus'
 import { NumberField } from '../ui/NumberField'
 import { IconButton } from '../ui/IconButton'
@@ -31,8 +31,9 @@ const MAX_FRAME_PX = 60
 
 /** Zoom maximal utile pour la durée et la largeur de piste données. */
 function maxZoomFor(duration: number, viewportWidth: number): number {
-  if (viewportWidth <= 0) return MAX_ZOOM
-  return Math.max(1, Math.min(MAX_ZOOM, (MAX_FRAME_PX * FPS * duration) / viewportWidth))
+  const lanes = viewportWidth - LABEL_W
+  if (lanes <= 0) return MAX_ZOOM
+  return Math.max(1, Math.min(MAX_ZOOM, (MAX_FRAME_PX * FPS * duration) / lanes))
 }
 
 /**
@@ -57,6 +58,7 @@ export function Timeline() {
   const viewportRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const playheadRef = useRef<HTMLDivElement>(null)
+  const knobRef = useRef<HTMLDivElement>(null)
   const timeLabelRef = useRef<HTMLSpanElement>(null)
   const frameLabelRef = useRef<HTMLSpanElement>(null)
   const [zoom, setZoom] = useState(1)
@@ -70,15 +72,17 @@ export function Timeline() {
     const loop = () => {
       const f = rigStore.currentTime / rigStore.duration
       if (playheadRef.current) playheadRef.current.style.left = `${f * 100}%`
+      if (knobRef.current) knobRef.current.style.left = `${f * 100}%`
       if (timeLabelRef.current) timeLabelRef.current.textContent = `${rigStore.currentTime.toFixed(2)}s`
       if (frameLabelRef.current)
         frameLabelRef.current.textContent = `image ${Math.round(rigStore.currentTime * FPS)}`
       const vp = viewportRef.current
       const ct = contentRef.current
       if (rigStore.playing && vp && ct && ct.clientWidth > vp.clientWidth) {
+        // La colonne des noms de pistes masque le bord gauche de la vue.
         const x = ct.offsetLeft + f * ct.clientWidth
-        if (x < vp.scrollLeft || x > vp.scrollLeft + vp.clientWidth - 16) {
-          vp.scrollLeft = x - vp.clientWidth * 0.1
+        if (x < vp.scrollLeft + LABEL_W || x > vp.scrollLeft + vp.clientWidth - 16) {
+          vp.scrollLeft = x - LABEL_W - (vp.clientWidth - LABEL_W) * 0.1
         }
       }
       raf = requestAnimationFrame(loop)
@@ -103,7 +107,7 @@ export function Timeline() {
     let x = clientX
     if (x === undefined) {
       const ph = cr.left + (rigStore.currentTime / rigStore.duration) * cr.width
-      x = ph >= vr.left && ph <= vr.right ? ph : vr.left + vr.width / 2
+      x = ph >= vr.left + LABEL_W && ph <= vr.right ? ph : vr.left + (vr.width + LABEL_W) / 2
     }
     anchor.current = { f: (x - cr.left) / (cr.width || 1), offset: x - vr.left }
     setZoom(next)
@@ -139,7 +143,10 @@ export function Timeline() {
   }, [zoom, maxZoom])
 
   const sel = rig.selectedKeyframes
-  const single = sel.length === 1 ? sel[0] : null
+  // Le champ « à » s'affiche quand toute la sélection tombe au même instant
+  // (une keyframe, ou un repère d'élément qui en regroupe plusieurs).
+  const sameTime =
+    sel.length > 0 && sel.every((k) => Math.abs(k.time - sel[0].time) < 1e-6) ? sel[0].time : null
   const durationMin = stretch ? 0.5 : Math.max(0.5, rig.lastKeyTime)
 
   return (
@@ -262,17 +269,17 @@ export function Timeline() {
                 <span className="mr-1 hidden whitespace-nowrap xl:inline">
                   {sel.length} sélectionnée{sel.length > 1 ? 's' : ''}
                 </span>
-                {single && (
+                {sameTime !== null && (
                   <NumberField
                     className="mr-1 max-xl:hidden"
                     label="à"
-                    value={Number(single.time.toFixed(3))}
+                    value={Number(sameTime.toFixed(3))}
                     min={0}
                     max={rig.duration}
                     step={1 / FPS}
                     suffix="s"
                     title="Instant de la keyframe (calé sur les images)"
-                    onChange={(v) => rig.setKeyTime(single.id, v)}
+                    onChange={(v) => rig.setSelectionTime(v)}
                   />
                 )}
                 <InterpMenu />
@@ -357,6 +364,7 @@ export function Timeline() {
           viewportRef={viewportRef}
           contentRef={contentRef}
           playheadRef={playheadRef}
+          knobRef={knobRef}
         />
       </div>
     </section>

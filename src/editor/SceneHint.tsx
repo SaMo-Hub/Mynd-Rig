@@ -1,5 +1,5 @@
 import { useRig } from './useRig'
-import { LIMB_BY_KEY } from '../rig/rigData'
+import { ELEMENT_BY_ID } from './tracks'
 
 /**
  * Indice posé sur la scène, par ordre de priorité : une pose modifiée qui n'est
@@ -36,7 +36,7 @@ export function SceneHint() {
         <>
           Sélection :{' '}
           <span className="font-semibold text-text-primary">
-            {LIMB_BY_KEY[rig.selected]?.label ?? rig.selected}
+            {ELEMENT_BY_ID[rig.selected]?.label ?? rig.selected}
           </span>
         </>
       ) : rig.mode === 'pose' ? (

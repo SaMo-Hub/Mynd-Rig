@@ -38,8 +38,8 @@ export function SceneToolbar() {
           onClick={() => rig.addKeyframe()}
           title={
             rig.poseDirty
-              ? 'Pose modifiée, pas encore enregistrée — l’enregistrer au playhead (K)'
-              : 'Enregistrer la pose actuelle à l’instant du playhead (K)'
+              ? 'Modification pas encore enregistrée — l’enregistrer au playhead (K)'
+              : 'Keyframe au playhead : ce qui a changé, sinon l’élément sélectionné (K)'
           }
           aria-label={rig.poseDirty ? 'Ajouter une keyframe (pose non enregistrée)' : 'Ajouter une keyframe'}
           className="relative"

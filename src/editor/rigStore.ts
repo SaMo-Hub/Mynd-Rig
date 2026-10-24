@@ -1,5 +1,17 @@
-import { CHAR_CX, CHAR_CY, GAZE_MAX, LIMBS } from '../rig/rigData'
+import { CHAR_CX, CHAR_CY, GAZE_MAX, LIMBS, LIMB_BY_KEY, limbLength } from '../rig/rigData'
 import type { AnimationDef, DepthSort, LimbStyle } from '../rig/animations'
+import {
+  ELEMENT_BY_ID,
+  PRIMARY_PROPS,
+  PROPS,
+  PROP_BY_ID,
+  bendProp,
+  curveProp,
+  posProp,
+  propValue,
+  writeProp,
+  type PropDef,
+} from './tracks'
 
 export type Mode = 'pose' | 'rig'
 
@@ -8,10 +20,22 @@ export interface Vec {
   y: number
 }
 
-/** Une pose = ce qui est animé par la timeline. */
+/** Forme d'un membre : animable, comme la position (voir `tracks.ts`). */
+export interface LimbShape {
+  curve: number
+  bendDeg: number
+}
+
+/**
+ * Une pose = l'état de toutes les propriétés animables à un instant. Les
+ * keyframes n'en stockent qu'une propriété chacune ; les propriétés non
+ * animées gardent ici leur valeur fixe.
+ */
 export interface Pose {
   /** cible d'extrémité (main / pied) de chaque membre, coords locales. */
   targets: Record<string, Vec>
+  /** rondeur et rotation du pli de chaque membre. */
+  shape: Record<string, LimbShape>
   bodyX: number
   bodyY: number
   bodyRot: number
@@ -30,17 +54,23 @@ export interface Pose {
  * - `linear` : vitesse constante. Défaut des presets, dont la fluidité vient de
  *   la densité d'échantillonnage.
  * - `ease` : ralenti à l'arrivée et au départ de chaque keyframe.
- * - `hold` : la pose tient jusqu'à la keyframe suivante, puis saute.
+ * - `hold` : la valeur tient jusqu'à la keyframe suivante, puis saute.
  */
 export type Interp = 'smooth' | 'linear' | 'ease' | 'hold'
 export const INTERPS: readonly Interp[] = ['smooth', 'linear', 'ease', 'hold']
 
+/** Keyframe d'**une** propriété (`prop`, cf. `tracks.ts`). */
 export interface Keyframe {
   id: number
+  prop: string
   time: number
-  pose: Pose
+  /** valeurs de la propriété (x/y pour une position, un nombre sinon). */
+  v: number[]
   interp: Interp
 }
+
+/** État d'une propriété au playhead, pour le bouton keyframe du panneau. */
+export type KeyState = 'key' | 'animated' | 'static'
 
 export type Anchors = Record<string, Vec>
 
@@ -58,18 +88,32 @@ const MIN_DURATION = 0.5
 const HISTORY_LIMIT = 200
 /** Fenêtre de fusion des gestes répétés (curseur, flèches) en un seul pas d'annulation. */
 const COALESCE_MS = 700
+const DEG = Math.PI / 180
+const TAU = Math.PI * 2
+
+/** Position des extrémités épinglées : elle bouge quand le corps bouge. */
+const PINNED_POS = LIMBS.filter((l) => l.pinned).map((l) => posProp(l.key))
+
+export const DEFAULT_SHAPE: LimbShape = { curve: 1, bendDeg: 0 }
 
 export function emptyPose(): Pose {
   const targets: Record<string, Vec> = {}
-  for (const l of LIMBS) targets[l.key] = { ...l.restTarget }
-  return { targets, bodyX: 0, bodyY: 0, bodyRot: 0, gazeX: 0, gazeY: 0 }
+  const shape: Record<string, LimbShape> = {}
+  for (const l of LIMBS) {
+    targets[l.key] = { ...l.restTarget }
+    shape[l.key] = { ...DEFAULT_SHAPE }
+  }
+  return { targets, shape, bodyX: 0, bodyY: 0, bodyRot: 0, gazeX: 0, gazeY: 0 }
 }
 
 export function clonePose(p: Pose): Pose {
   const targets: Record<string, Vec> = {}
   for (const k in p.targets) targets[k] = { ...p.targets[k] }
+  const shape: Record<string, LimbShape> = {}
+  for (const k in p.shape) shape[k] = { ...p.shape[k] }
   return {
     targets,
+    shape,
     bodyX: p.bodyX,
     bodyY: p.bodyY,
     bodyRot: p.bodyRot,
@@ -79,7 +123,7 @@ export function clonePose(p: Pose): Pose {
 }
 
 function cloneKey(k: Keyframe): Keyframe {
-  return { id: k.id, time: k.time, pose: clonePose(k.pose), interp: k.interp }
+  return { id: k.id, prop: k.prop, time: k.time, v: [...k.v], interp: k.interp }
 }
 
 function lerp(a: number, b: number, f: number): number {
@@ -90,38 +134,9 @@ function easeInOut(f: number): number {
   return f < 0.5 ? 4 * f * f * f : 1 - Math.pow(-2 * f + 2, 3) / 2
 }
 
-// --- Canaux ------------------------------------------------------------------
-// L'interpolation lisse a besoin des voisins de chaque keyframe, canal par
-// canal : la pose est aplatie en un vecteur de nombres (buffers réutilisés, pas
-// d'allocation par frame).
-const LIMB_KEYS = LIMBS.map((l) => l.key)
-const N_CH = LIMB_KEYS.length * 2 + 5
-
-function readChannels(p: Pose, out: Float64Array): void {
-  let i = 0
-  for (const k of LIMB_KEYS) {
-    const t = p.targets[k]
-    out[i++] = t?.x ?? 0
-    out[i++] = t?.y ?? 0
-  }
-  out[i++] = p.bodyX
-  out[i++] = p.bodyY
-  out[i++] = p.bodyRot
-  out[i++] = p.gazeX
-  out[i] = p.gazeY
-}
-
-function writeChannels(src: Float64Array, out: Pose): void {
-  let i = 0
-  for (const k of LIMB_KEYS) {
-    out.targets[k] = { x: src[i], y: src[i + 1] }
-    i += 2
-  }
-  out.bodyX = src[i++]
-  out.bodyY = src[i++]
-  out.bodyRot = src[i++]
-  out.gazeX = src[i++]
-  out.gazeY = src[i]
+/** Ramène un angle dans ]-π, π]. */
+function wrapPi(a: number): number {
+  return a - TAU * Math.round(a / TAU)
 }
 
 /**
@@ -145,7 +160,7 @@ interface Snapshot {
   loop: boolean
   pose: Pose
   anchors: Anchors
-  limbStyle: Record<string, LimbStyle>
+  stretch: Record<string, boolean>
   styleLinked: boolean
   depthSort: DepthSort | 'none'
   keySelection: number[]
@@ -155,8 +170,25 @@ interface Snapshot {
 interface ClipKey {
   /** temps relatif à la première keyframe copiée. */
   dt: number
-  pose: Pose
+  prop: string
+  v: number[]
   interp: Interp
+}
+
+/** Piste à faire tourner dans la boucle (voir `wrapPlan`). */
+interface WrapTrack {
+  prop: string
+  /** keyframes d'origine, figées au début du geste. */
+  keys: Keyframe[]
+  /** id réservé à la keyframe de début qu'ajoute la rotation. */
+  startId: number
+}
+
+/** Une pose datée, telle que la produisent les presets et l'ancien format. */
+interface PoseFrame {
+  time: number
+  interp: Interp
+  pose: Pose
 }
 
 /**
@@ -165,7 +197,8 @@ interface ClipKey {
  *
  * Épinglage : les extrémités `pinned` (les pieds) restent fixes dans le monde
  * quand le corps bouge. Comme les cibles sont stockées en coords locales, on
- * compense la cible à chaque déplacement / rotation du corps.
+ * compense la cible à chaque déplacement / rotation du corps — la position des
+ * pieds compte donc parmi les propriétés modifiées par ce geste.
  *
  * Historique : chaque geste qui modifie le document pose un `checkpoint()`
  * **avant** de le modifier. Un glissé sur la scène = un seul pas (préparé au
@@ -174,6 +207,7 @@ interface ClipKey {
  */
 class RigStore {
   mode: Mode = 'pose'
+  /** Élément sélectionné (`body`, `gaze` ou la clé d'un membre). */
   selected: string | null = null
   /** échelle de rendu, écrite par le canvas (nécessaire à la compensation). */
   viewScale = 1
@@ -181,9 +215,8 @@ class RigStore {
   anchors: Anchors = Object.fromEntries(LIMBS.map((l) => [l.key, { ...l.anchor }]))
   pose: Pose = emptyPose()
 
-  /** Style de pliage par membre (config, non animé). */
-  limbStyle: Record<string, LimbStyle> =
-    Object.fromEntries(LIMBS.map((l) => [l.key, { curve: 1, bendDeg: 0, stretch: false }]))
+  /** Étirement autorisé, par membre (config, non animée). */
+  stretch: Record<string, boolean> = Object.fromEntries(LIMBS.map((l) => [l.key, false]))
   /** Curseurs liés : un réglage s'applique aux 4 membres. */
   styleLinked = true
   /** Les pupilles suivent le curseur de la souris. */
@@ -196,6 +229,7 @@ class RigStore {
    */
   depthSort: DepthSort | 'none' = 'none'
 
+  /** Toutes les keyframes, toutes propriétés confondues, triées par temps. */
   keyframes: Keyframe[] = []
   duration = 4
   currentTime = 0
@@ -203,15 +237,16 @@ class RigStore {
   loop = true
 
   /**
-   * Auto-keyframe : toute modification de la pose s'enregistre à l'instant du
-   * playhead (crée la keyframe ou met à jour celle qui s'y trouve).
+   * Auto-keyframe : toute modification d'une propriété s'enregistre à
+   * l'instant du playhead (crée la keyframe ou met à jour celle qui s'y trouve).
    */
   autoKey = false
   /** Keyframes sélectionnées dans la timeline (ids). */
   keySelection = new Set<number>()
   /**
-   * La pose affichée a été modifiée sans être enregistrée : le prochain
-   * déplacement du playhead la perdra. Toujours faux en auto-keyframe.
+   * Une propriété **animée** a été modifiée sans être enregistrée : le
+   * prochain déplacement du playhead la perdra. Toujours faux en auto-keyframe.
+   * (Une propriété non animée, elle, garde sa nouvelle valeur.)
    */
   poseDirty = false
   /** Keyframes copiées, en temps relatif. */
@@ -232,13 +267,24 @@ class RigStore {
   private pendingCheckpoint: Snapshot | null = null
   /** Temps d'origine des keyframes pendant un glissé dans la timeline. */
   private dragOrigin: Map<number, number> | null = null
+  /** Glissé en boucle en cours (voir `wrapPlan`). */
+  private wrapDrag: WrapTrack[] | null = null
+  /** Décalage en boucle au clavier en cours, cumulé sur une rafale. */
+  private nudgeWrap: { plan: WrapTrack[]; delta: number; ids: Set<number> } | null = null
+  /**
+   * Propriétés modifiées depuis le dernier déplacement du playhead : c'est ce
+   * qu'enregistre la touche K.
+   */
+  private edited = new Set<string>()
 
-  // Buffers de l'interpolation.
-  private chP = new Float64Array(N_CH)
-  private chA = new Float64Array(N_CH)
-  private chB = new Float64Array(N_CH)
-  private chN = new Float64Array(N_CH)
-  private chOut = new Float64Array(N_CH)
+  // Buffers de l'interpolation (une propriété a au plus 2 valeurs).
+  private chP = new Float64Array(2)
+  private chA = new Float64Array(2)
+  private chB = new Float64Array(2)
+  private chN = new Float64Array(2)
+  private chOut = new Float64Array(2)
+  /** Keyframes regroupées par propriété, recalculées à chaque échantillonnage. */
+  private groups: Record<string, Keyframe[]> = Object.fromEntries(PROPS.map((d) => [d.id, []]))
 
   subscribe = (fn: () => void): (() => void) => {
     this.listeners.add(fn)
@@ -297,8 +343,6 @@ class RigStore {
   }
 
   private snapshot(): Snapshot {
-    const limbStyle: Record<string, LimbStyle> = {}
-    for (const k in this.limbStyle) limbStyle[k] = { ...this.limbStyle[k] }
     const anchors: Anchors = {}
     for (const k in this.anchors) anchors[k] = { ...this.anchors[k] }
     return {
@@ -307,7 +351,7 @@ class RigStore {
       loop: this.loop,
       pose: clonePose(this.pose),
       anchors,
-      limbStyle,
+      stretch: { ...this.stretch },
       styleLinked: this.styleLinked,
       depthSort: this.depthSort,
       keySelection: [...this.keySelection],
@@ -321,14 +365,16 @@ class RigStore {
     this.loop = s.loop
     this.pose = s.pose
     this.anchors = s.anchors
-    this.limbStyle = s.limbStyle
+    this.stretch = s.stretch
     this.styleLinked = s.styleLinked
     this.depthSort = s.depthSort
     this.keySelection = new Set(s.keySelection)
     this.currentTime = s.currentTime
     this.playing = false
     this.poseDirty = false
+    this.edited.clear()
     this.dragOrigin = null
+    this.wrapDrag = null
     this.pendingCheckpoint = null
     // Le geste suivant ouvre un nouveau pas, même s'il porte le même tag.
     this.lastTag = ''
@@ -364,23 +410,31 @@ class RigStore {
     this.emit()
   }
 
-  /** Après toute modification de la pose : auto-keyframe, ou pose « non enregistrée ». */
-  private poseEdited(): void {
+  /**
+   * Après toute modification de propriétés : auto-keyframe, ou pose « non
+   * enregistrée » si l'une d'elles est animée.
+   */
+  private poseEdited(props: readonly string[]): void {
     this.commitPending()
+    for (const p of props) this.edited.add(p)
     if (this.autoKey) {
-      const k = this.upsertKey(this.currentTime)
-      if (this.keySelection.size !== 1 || !this.keySelection.has(k.id)) {
-        this.keySelection = new Set([k.id])
+      const ids = props.map((p) => this.upsertKey(p, this.currentTime).id)
+      if (this.keySelection.size !== ids.length || !ids.every((id) => this.keySelection.has(id))) {
+        this.keySelection = new Set(ids)
       }
+      for (const p of props) this.edited.delete(p)
       this.poseDirty = false
-    } else if (this.keyframes.length > 0) {
-      this.poseDirty = true
+    } else {
+      this.updateDirty()
     }
+  }
+  private updateDirty(): void {
+    this.poseDirty = !this.autoKey && [...this.edited].some((p) => this.isAnimated(p))
   }
 
   setTarget(key: string, x: number, y: number): void {
     this.pose.targets[key] = { x, y }
-    this.poseEdited()
+    this.poseEdited([posProp(key)])
     this.emit()
   }
   setAnchor(key: string, x: number, y: number): void {
@@ -391,7 +445,7 @@ class RigStore {
   /** Déplace le regard (borné au blanc de l'œil). */
   setGaze(x: number, y: number): void {
     this.applyGaze(x, y)
-    this.poseEdited()
+    this.poseEdited(['gaze.pos'])
     this.emit()
   }
   /**
@@ -415,31 +469,96 @@ class RigStore {
     this.followGaze = v
     this.emit()
   }
+  /** Remet la pose au repos ; la forme des membres (un réglage) est gardée. */
   resetPose(): void {
     this.checkpoint()
     this.playing = false
+    const shape = this.pose.shape
     this.pose = emptyPose()
-    this.poseEdited()
+    this.pose.shape = shape
+    this.poseEdited(PRIMARY_PROPS.map((d) => d.id))
     this.emit()
   }
 
-  // --- Style de pliage ---
+  // --- Rotation (panneau) ---
+  /** Angle d'un membre autour de son attache, en degrés (0° = vers le bas). */
+  limbAngle(key: string): number {
+    const a = this.anchors[key]
+    const t = this.pose.targets[key]
+    return Math.atan2(t.x - a.x, t.y - a.y) / DEG
+  }
+  /** Tourne un membre autour de son attache, sans changer son extension. */
+  setLimbAngle(key: string, deg: number): void {
+    this.checkpoint(`angle:${key}`)
+    this.playing = false
+    const a = this.anchors[key]
+    const t = this.pose.targets[key]
+    let d = Math.hypot(t.x - a.x, t.y - a.y)
+    if (d < 1) d = limbLength(LIMB_BY_KEY[key])
+    const r = deg * DEG
+    this.pose.targets[key] = { x: a.x + Math.sin(r) * d, y: a.y + Math.cos(r) * d }
+    this.poseEdited([posProp(key)])
+    this.emit()
+  }
+  setBodyRotDeg(deg: number): void {
+    this.checkpoint('body-rot')
+    this.playing = false
+    this.setBodyRot(deg * DEG)
+  }
+
+  // --- Forme des membres ---
   setStyleLinked(v: boolean): void {
     this.checkpoint()
     this.styleLinked = v
     this.emit()
   }
-  setLimbStyle(
-    key: string,
-    partial: Partial<{ curve: number; bendDeg: number; stretch: boolean }>,
-  ): void {
+  /** Applique un réglage aux membres donnés ; renvoie les propriétés modifiées. */
+  private applyStyle(keys: readonly string[], partial: Partial<LimbStyle>): string[] {
+    const props: string[] = []
+    for (const key of keys) {
+      if (partial.stretch !== undefined) this.stretch[key] = partial.stretch
+      const sh = this.pose.shape[key]
+      if (partial.curve !== undefined) {
+        this.pose.shape[key] = { ...sh, curve: partial.curve }
+        props.push(curveProp(key))
+      }
+      if (partial.bendDeg !== undefined) {
+        this.pose.shape[key] = { ...this.pose.shape[key], bendDeg: partial.bendDeg }
+        props.push(bendProp(key))
+      }
+    }
+    return props
+  }
+  setLimbStyle(key: string, partial: Partial<LimbStyle>): void {
     this.checkpoint(`style:${key}`)
-    this.limbStyle[key] = { ...this.limbStyle[key], ...partial }
+    this.playing = false
+    const props = this.applyStyle([key], partial)
+    // Un réglage propre à un membre délie les quatre : en mode lié ils ont
+    // tous la même valeur, donc rien n'est perdu.
+    this.styleLinked = false
+    if (props.length) this.poseEdited(props)
+    this.emit()
+  }
+  /** Recopie le style d'un membre sur les quatre et les relie. */
+  applyStyleToAll(key: string): void {
+    this.checkpoint()
+    this.playing = false
+    const props = this.applyStyle(
+      LIMBS.map((l) => l.key),
+      { ...this.pose.shape[key], stretch: this.stretch[key] },
+    )
+    this.styleLinked = true
+    this.poseEdited(props)
     this.emit()
   }
   setAllStyle(partial: Partial<LimbStyle>): void {
     this.checkpoint('style:all')
-    for (const l of LIMBS) this.limbStyle[l.key] = { ...this.limbStyle[l.key], ...partial }
+    this.playing = false
+    const props = this.applyStyle(
+      LIMBS.map((l) => l.key),
+      partial,
+    )
+    if (props.length) this.poseEdited(props)
     this.emit()
   }
 
@@ -455,10 +574,9 @@ class RigStore {
     for (const l of LIMBS) {
       if (!l.pinned) continue
       const t = this.pose.targets[l.key]
-      t.x -= ldx
-      t.y -= ldy
+      this.pose.targets[l.key] = { x: t.x - ldx, y: t.y - ldy }
     }
-    this.poseEdited()
+    this.poseEdited(['body.pos', ...PINNED_POS])
     this.emit()
   }
 
@@ -472,11 +590,10 @@ class RigStore {
       const t = this.pose.targets[l.key]
       const px = t.x - CHAR_CX
       const py = t.y - CHAR_CY
-      t.x = CHAR_CX + px * c - py * s
-      t.y = CHAR_CY + px * s + py * c
+      this.pose.targets[l.key] = { x: CHAR_CX + px * c - py * s, y: CHAR_CY + px * s + py * c }
     }
     this.pose.bodyRot = newRot
-    this.poseEdited()
+    this.poseEdited(['body.rot', ...PINNED_POS])
     this.emit()
   }
 
@@ -520,7 +637,8 @@ class RigStore {
   setTime(t: number): void {
     this.currentTime = Math.max(0, Math.min(this.duration, t))
     this.sampleInto(this.pose, this.currentTime)
-    if (this.keyframes.length > 0) this.poseDirty = false
+    this.poseDirty = false
+    this.edited.clear()
     this.emit()
   }
   /** Avance / recule d'un nombre d'images, sur la grille. */
@@ -547,6 +665,7 @@ class RigStore {
     if (!this.loop && this.currentTime >= this.duration - 1e-6) this.currentTime = 0
     this.playing = true
     this.poseDirty = false
+    this.edited.clear()
     this.emit()
   }
   pause(): void {
@@ -557,10 +676,38 @@ class RigStore {
     this.playing ? this.pause() : this.play()
   }
 
-  // --- Keyframes : création ---
-  private keyAt(time: number): Keyframe | undefined {
-    return this.keyframes.find((k) => Math.abs(k.time - time) < HALF_FRAME)
+  // --- Propriétés animées ---
+  isAnimated(prop: string): boolean {
+    return this.keyframes.some((k) => k.prop === prop)
   }
+  /** Keyframe de `prop` à `time` (à une demi-image près). */
+  keyAt(prop: string, time: number): Keyframe | undefined {
+    return this.keyframes.find((k) => k.prop === prop && Math.abs(k.time - time) < HALF_FRAME)
+  }
+  /**
+   * État des propriétés au playhead : toutes ont une keyframe ici (`key`),
+   * au moins une est animée (`animated`), ou aucune ne l'est (`static`).
+   */
+  keyState(props: readonly string[]): KeyState {
+    const t = snapToFrame(this.currentTime)
+    if (props.every((p) => this.keyAt(p, t))) return 'key'
+    return props.some((p) => this.isAnimated(p)) ? 'animated' : 'static'
+  }
+
+  /**
+   * Propriétés visées quand on ne précise pas lesquelles : celles déjà animées
+   * de l'élément sélectionné (ou de tout le personnage) ; si rien ne l'est
+   * encore, sa pose — position des membres, du corps, regard.
+   */
+  private scopeProps(element: string | null = this.selected): PropDef[] {
+    const el = element ? ELEMENT_BY_ID[element] : undefined
+    const all = el ? el.props : PROPS
+    const animated = all.filter((d) => this.isAnimated(d.id))
+    if (animated.length > 0) return animated
+    return el ? el.primary : PRIMARY_PROPS
+  }
+
+  // --- Keyframes : création ---
   private sortKeys(): void {
     this.keyframes.sort((a, b) => a.time - b.time)
   }
@@ -568,56 +715,103 @@ class RigStore {
   private refresh(): void {
     if (this.keyframes.length > 0) {
       this.sampleInto(this.pose, this.currentTime)
+      // Les propriétés animées viennent d'être réécrites par la courbe.
+      for (const p of [...this.edited]) if (this.isAnimated(p)) this.edited.delete(p)
       this.poseDirty = false
     }
     if (this.keyframes.length < 2) this.playing = false
   }
 
-  /** Écrit la pose courante à l'instant `t` (sur la grille) ; sans historique. */
-  private upsertKey(t: number): Keyframe {
+  /** Écrit la valeur courante de `prop` à l'instant `t` (sur la grille) ; sans historique. */
+  private upsertKey(prop: string, t: number): Keyframe {
     const time = Math.max(0, Math.min(this.duration, snapToFrame(t)))
-    const existing = this.keyAt(time)
+    const v = propValue(this.pose, PROP_BY_ID[prop])
+    const existing = this.keyAt(prop, time)
     if (existing) {
-      existing.pose = clonePose(this.pose)
+      existing.v = v
       return existing
     }
-    const k: Keyframe = { id: this.nextId++, time, pose: clonePose(this.pose), interp: 'smooth' }
+    const k: Keyframe = { id: this.nextId++, prop, time, v, interp: 'smooth' }
     this.keyframes.push(k)
     this.sortKeys()
     return k
   }
 
-  /** Enregistre la pose actuelle au playhead (bouton Keyframe, touche K). */
+  /**
+   * Bouton Keyframe, touche K : enregistre au playhead ce qui a été modifié
+   * depuis le dernier déplacement du playhead ; sans modification, les
+   * propriétés déjà animées de l'élément sélectionné (ou de tout le
+   * personnage), à défaut sa pose.
+   */
   addKeyframe(): void {
+    const props = this.edited.size > 0 ? [...this.edited] : this.scopeProps().map((d) => d.id)
     this.checkpoint()
     this.playing = false
-    const k = this.upsertKey(this.currentTime)
-    this.currentTime = k.time
-    this.keySelection = new Set([k.id])
+    const time = Math.max(0, Math.min(this.duration, snapToFrame(this.currentTime)))
+    const ids = props.map((p) => this.upsertKey(p, time).id)
+    this.currentTime = time
+    this.keySelection = new Set(ids)
     this.poseDirty = false
+    this.edited.clear()
     this.emit()
   }
 
   /**
-   * Insère une keyframe en `t` **sans changer le mouvement** : elle reprend la
-   * pose que l'animation a déjà à cet instant. Sert à poser un point de
-   * contrôle qu'on retouchera ensuite.
+   * Bouton keyframe d'une propriété (panneau) : ajoute la keyframe au playhead,
+   * ou la retire si toutes les propriétés en ont déjà une ici.
    */
-  insertKeyframeAt(t: number): void {
-    const time = Math.max(0, Math.min(this.duration, snapToFrame(t)))
+  toggleKeysAtPlayhead(props: readonly string[]): void {
+    if (props.length === 0) return
+    const time = Math.max(0, Math.min(this.duration, snapToFrame(this.currentTime)))
+    const existing = props.map((p) => this.keyAt(p, time))
     this.checkpoint()
     this.playing = false
-    let k = this.keyAt(time)
-    if (!k) {
-      const pose = clonePose(this.pose)
-      this.sampleInto(pose, time)
-      const prev = [...this.keyframes].reverse().find((x) => x.time < time)
-      k = { id: this.nextId++, time, pose, interp: prev?.interp ?? 'smooth' }
-      this.keyframes.push(k)
-      this.sortKeys()
+    if (existing.every((k) => k)) {
+      const del = new Set(existing.map((k) => k!.id))
+      this.keyframes = this.keyframes.filter((k) => !del.has(k.id))
+      this.keySelection = new Set([...this.keySelection].filter((id) => !del.has(id)))
+      this.refresh()
+    } else {
+      this.currentTime = time
+      this.keySelection = new Set(props.map((p) => this.upsertKey(p, time).id))
+      for (const p of props) this.edited.delete(p)
+      this.updateDirty()
     }
-    this.keySelection = new Set([k.id])
-    this.setTime(k.time)
+    this.emit()
+  }
+
+  /**
+   * Insère des keyframes en `t` **sans changer le mouvement** : elles
+   * reprennent la valeur que l'animation a déjà à cet instant. Sert à poser un
+   * point de contrôle qu'on retouchera ensuite. `props` : les propriétés
+   * visées (une piste de la timeline), sinon tout ce qui est animé.
+   */
+  insertKeyframeAt(t: number, props?: readonly string[]): void {
+    const time = Math.max(0, Math.min(this.duration, snapToFrame(t)))
+    const targets = props ?? this.scopeProps(null).map((d) => d.id)
+    this.checkpoint()
+    this.playing = false
+    const sampled = clonePose(this.pose)
+    this.sampleInto(sampled, time)
+    const ids: number[] = []
+    for (const prop of targets) {
+      let k = this.keyAt(prop, time)
+      if (!k) {
+        const prev = [...this.keyframes].reverse().find((x) => x.prop === prop && x.time < time)
+        k = {
+          id: this.nextId++,
+          prop,
+          time,
+          v: propValue(sampled, PROP_BY_ID[prop]),
+          interp: prev?.interp ?? 'smooth',
+        }
+        this.keyframes.push(k)
+      }
+      ids.push(k.id)
+    }
+    this.sortKeys()
+    this.keySelection = new Set(ids)
+    this.setTime(time)
   }
 
   // --- Keyframes : sélection ---
@@ -625,10 +819,13 @@ class RigStore {
     this.keySelection = new Set(ids)
     this.emit()
   }
-  toggleKeySelection(id: number): void {
+  toggleKeySelection(ids: readonly number[]): void {
     const s = new Set(this.keySelection)
-    if (s.has(id)) s.delete(id)
-    else s.add(id)
+    const all = ids.every((id) => s.has(id))
+    for (const id of ids) {
+      if (all) s.delete(id)
+      else s.add(id)
+    }
     this.keySelection = s
     this.emit()
   }
@@ -649,16 +846,28 @@ class RigStore {
     this.playing = false
     this.setTime(k.time)
   }
-  /** Saute à la keyframe précédente / suivante et la sélectionne. */
+  /**
+   * Saute au temps de keyframe précédent / suivant — de l'élément sélectionné
+   * s'il est animé, sinon de toutes les pistes — et sélectionne ce qui s'y trouve.
+   */
   jumpToKeyframe(dir: -1 | 1): void {
+    const el = this.selected ? ELEMENT_BY_ID[this.selected] : undefined
+    let keys = this.keyframes
+    if (el) {
+      const own = new Set(el.props.map((d) => d.id))
+      const mine = keys.filter((k) => own.has(k.prop))
+      if (mine.length > 0) keys = mine
+    }
     const t = this.currentTime
     const eps = 1e-4
     const k =
       dir < 0
-        ? [...this.keyframes].reverse().find((x) => x.time < t - eps)
-        : this.keyframes.find((x) => x.time > t + eps)
+        ? [...keys].reverse().find((x) => x.time < t - eps)
+        : keys.find((x) => x.time > t + eps)
     if (!k) return
-    this.keySelection = new Set([k.id])
+    this.keySelection = new Set(
+      keys.filter((x) => Math.abs(x.time - k.time) < HALF_FRAME).map((x) => x.id),
+    )
     this.playing = false
     this.setTime(k.time)
   }
@@ -683,6 +892,7 @@ class RigStore {
     this.keySelection = new Set()
     this.playing = false
     this.poseDirty = false
+    this.edited.clear()
     this.emit()
   }
 
@@ -695,15 +905,17 @@ class RigStore {
   }
 
   /**
-   * Une keyframe sélectionnée qui tombe sur une autre (à moins d'une
-   * demi-image) la **remplace** : deux poses au même instant n'ont pas de sens.
+   * Une keyframe sélectionnée qui tombe sur une autre **de la même
+   * propriété** (à moins d'une demi-image) la remplace : deux valeurs au même
+   * instant n'ont pas de sens.
    */
   private mergeSelected(): void {
     const sel = this.selectedKeyframes
     if (sel.length === 0) return
     this.keyframes = this.keyframes.filter(
       (k) =>
-        this.keySelection.has(k.id) || !sel.some((s) => Math.abs(s.time - k.time) < HALF_FRAME),
+        this.keySelection.has(k.id) ||
+        !sel.some((s) => s.prop === k.prop && Math.abs(s.time - k.time) < HALF_FRAME),
     )
   }
 
@@ -724,6 +936,74 @@ class RigStore {
   }
 
   /**
+   * Décalage **en boucle** : quand la lecture boucle et que la sélection
+   * couvre des pistes entières qui sont des cycles fermés (une keyframe au
+   * début, une à la fin, même valeur), décaler ne doit pas buter sur les
+   * bords — ce qui sort par la fin rentre par le début. C'est ce qui permet
+   * de faire partir un bras d'une marche avant l'autre : sans ça, ses
+   * keyframes occupent déjà toute la durée et ne peuvent pas bouger.
+   *
+   * Renvoie le plan (keyframes d'origine par propriété), ou `null` si la
+   * sélection ne s'y prête pas : on revient alors au décalage borné.
+   */
+  private wrapPlan(): WrapTrack[] | null {
+    if (!this.loop) return null
+    const sel = this.selectedKeyframes
+    if (sel.length === 0) return null
+    const D = this.duration
+    const plan: WrapTrack[] = []
+    for (const prop of new Set(sel.map((k) => k.prop))) {
+      const keys = this.keyframes.filter((k) => k.prop === prop)
+      if (!keys.every((k) => this.keySelection.has(k.id))) return null
+      const first = keys[0]
+      const last = keys[keys.length - 1]
+      const closed =
+        keys.length >= 2 &&
+        first.time < HALF_FRAME &&
+        Math.abs(last.time - D) < HALF_FRAME &&
+        first.v.every((x, c) => Math.abs(x - last.v[c]) < 1e-6)
+      if (!closed) return null
+      plan.push({ prop, keys: keys.map(cloneKey), startId: this.nextId++ })
+    }
+    return plan
+  }
+
+  /** Fait tourner chaque cycle du plan de `delta` secondes. */
+  private applyWrap(plan: WrapTrack[], delta: number): void {
+    const D = this.duration
+    const phi = ((delta % D) + D) % D
+    const wrapped = new Set(plan.map((w) => w.prop))
+    const next = this.keyframes.filter((k) => !wrapped.has(k.prop))
+    const tmp = clonePose(this.pose)
+    for (const w of plan) {
+      const d = PROP_BY_ID[w.prop]
+      const closing = w.keys[w.keys.length - 1]
+      const inner = w.keys.slice(0, -1)
+      for (const k of inner) {
+        let t = k.time + phi
+        if (t >= D - 1e-9) t -= D
+        next.push({ ...cloneKey(k), time: Math.max(0, t) })
+      }
+      // Le début et la fin du cycle tombent maintenant au milieu d'un segment
+      // d'origine : on y pose la valeur de l'animation d'origine, pour que le
+      // cycle reste fermé.
+      const s = D - phi
+      const onStart = phi < 1e-9 || inner.some((k) => Math.abs(k.time - s) < 1e-9)
+      this.sampleProp(d, w.keys, s % D, tmp)
+      const v = propValue(tmp, d)
+      const from = [...w.keys].reverse().find((k) => k.time <= s) ?? w.keys[0]
+      if (!onStart) next.push({ id: w.startId, prop: w.prop, time: 0, v, interp: from.interp })
+      next.push({ ...cloneKey(closing), time: D, v: onStart ? [...closing.v] : [...v], interp: from.interp })
+    }
+    this.keyframes = next
+    this.sortKeys()
+    // La keyframe de début, créée par la rotation, fait partie du bloc.
+    const ids = new Set(this.keySelection)
+    for (const w of plan) if (this.keyframes.some((k) => k.id === w.startId)) ids.add(w.startId)
+    this.keySelection = ids
+  }
+
+  /**
    * Glissé de keyframes dans la timeline. `duplicate` (Alt) : une copie reste
    * en place et c'est l'original qui part.
    */
@@ -731,6 +1011,7 @@ class RigStore {
     this.checkpoint()
     this.playing = false
     const sel = this.selectedKeyframes
+    this.wrapDrag = duplicate ? null : this.wrapPlan()
     if (duplicate) {
       for (const k of sel) this.keyframes.push({ ...cloneKey(k), id: this.nextId++ })
       this.sortKeys()
@@ -742,14 +1023,17 @@ class RigStore {
     const origin = this.dragOrigin
     const lead = origin?.get(leadId)
     if (!origin || lead === undefined) return
-    this.shiftSelection(origin, snapToFrame(rawTime) - lead)
+    const delta = snapToFrame(rawTime) - lead
+    if (this.wrapDrag) this.applyWrap(this.wrapDrag, delta)
+    else this.shiftSelection(origin, delta)
     this.refreshPoseOnly()
     this.emit()
   }
   endKeyDrag(): void {
     if (!this.dragOrigin) return
     this.dragOrigin = null
-    this.mergeSelected()
+    if (!this.wrapDrag) this.mergeSelected()
+    this.wrapDrag = null
     this.refresh()
     this.emit()
   }
@@ -762,23 +1046,40 @@ class RigStore {
   nudgeSelected(frames: number): void {
     const sel = this.selectedKeyframes
     if (sel.length === 0) return
+    // Une rafale de flèches sur la même sélection = un seul décalage en
+    // boucle, refait depuis l'origine : sinon chaque appui ajouterait sa
+    // keyframe de début.
+    const nw = this.nudgeWrap
+    const same =
+      nw !== null &&
+      this.lastTag === 'nudge' &&
+      performance.now() - this.lastAt < COALESCE_MS &&
+      nw.ids.size === this.keySelection.size &&
+      [...nw.ids].every((id) => this.keySelection.has(id))
     this.checkpoint('nudge')
-    this.shiftSelection(new Map(sel.map((k) => [k.id, k.time])), frames * FRAME)
-    this.mergeSelected()
+    const plan = same ? nw.plan : this.wrapPlan()
+    if (plan) {
+      const delta = (same ? nw.delta : 0) + frames * FRAME
+      this.applyWrap(plan, delta)
+      this.nudgeWrap = { plan, delta, ids: new Set(this.keySelection) }
+    } else {
+      this.nudgeWrap = null
+      this.shiftSelection(new Map(sel.map((k) => [k.id, k.time])), frames * FRAME)
+      this.mergeSelected()
+    }
     this.refresh()
     this.emit()
   }
 
-  /** Place une keyframe à un temps précis (champ « Temps »). */
-  setKeyTime(id: number, t: number): void {
-    const k = this.keyframes.find((x) => x.id === id)
-    if (!k || !Number.isFinite(t)) return
+  /** Amène la sélection (sa première keyframe) à un temps précis (champ « à »). */
+  setSelectionTime(t: number): void {
+    const sel = this.selectedKeyframes
+    if (sel.length === 0 || !Number.isFinite(t)) return
     const time = Math.max(0, Math.min(this.duration, snapToFrame(t)))
-    if (Math.abs(time - k.time) < 1e-9) return
+    const delta = time - sel[0].time
+    if (Math.abs(delta) < 1e-9) return
     this.checkpoint()
-    k.time = time
-    this.sortKeys()
-    this.keySelection = new Set([id])
+    this.shiftSelection(new Map(sel.map((k) => [k.id, k.time])), delta)
     this.mergeSelected()
     this.refresh()
     this.emit()
@@ -801,14 +1102,14 @@ class RigStore {
     const sel = this.selectedKeyframes
     if (sel.length === 0) return
     const t0 = sel[0].time
-    this.clipboard = sel.map((k) => ({ dt: k.time - t0, pose: clonePose(k.pose), interp: k.interp }))
+    this.clipboard = sel.map((k) => ({ dt: k.time - t0, prop: k.prop, v: [...k.v], interp: k.interp }))
     this.emit()
   }
 
   /**
-   * Colle le presse-papiers à partir de `at` (le playhead par défaut). Les
-   * keyframes collées remplacent celles qui occupent les mêmes instants, et la
-   * durée s'allonge si le bloc dépasse la fin.
+   * Colle le presse-papiers à partir de `at` (le playhead par défaut), sur les
+   * mêmes propriétés. Les keyframes collées remplacent celles qui occupent les
+   * mêmes instants, et la durée s'allonge si le bloc dépasse la fin.
    */
   paste(at = this.currentTime): void {
     const clip = this.clipboard
@@ -822,7 +1123,7 @@ class RigStore {
       if (time > this.duration) this.duration = time
       const id = this.nextId++
       ids.push(id)
-      this.keyframes.push({ id, time, pose: clonePose(c.pose), interp: c.interp })
+      this.keyframes.push({ id, prop: c.prop, time, v: [...c.v], interp: c.interp })
     }
     this.sortKeys()
     this.keySelection = new Set(ids)
@@ -848,6 +1149,28 @@ class RigStore {
   }
 
   /**
+   * Découpe des poses datées (presets, ancien format) en keyframes par
+   * propriété. Une propriété qui ne bouge pas n'est pas animée : sa valeur est
+   * posée dans la pose courante, et la timeline n'affiche que ce qui bouge.
+   */
+  private keysFromPoses(frames: PoseFrame[]): Keyframe[] {
+    const keys: Keyframe[] = []
+    for (const d of PRIMARY_PROPS) {
+      const vals = frames.map((f) => propValue(f.pose, d))
+      const still =
+        frames.length > 1 && vals.every((v) => v.every((x, c) => Math.abs(x - vals[0][c]) < 1e-6))
+      if (still) {
+        writeProp(this.pose, d, vals[0])
+        continue
+      }
+      frames.forEach((f, i) =>
+        keys.push({ id: this.nextId++, prop: d.id, time: f.time, v: vals[i], interp: f.interp }),
+      )
+    }
+    return keys.sort((a, b) => a.time - b.time)
+  }
+
+  /**
    * Échantillonne une animation procédurale en keyframes éditables.
    *
    * L'interpolation `linear` des presets suffit : leur fluidité vient de la
@@ -855,36 +1178,39 @@ class RigStore {
    * (bornes incluses) : pour un cycle, la dernière rejoint exactement la
    * première, ce qui fait boucler la lecture sans plateau final.
    *
+   * La forme des membres (rondeur, pli) est posée en valeur fixe, pas animée.
    * Remplace les keyframes existantes — l'appelant prévient l'utilisateur, et
    * c'est annulable.
    */
   loadAnimation(def: AnimationDef): void {
     this.checkpoint()
     const ctx = { scale: this.viewScale || 1, anchors: this.anchors }
-    const frames: Keyframe[] = []
+    const frames: PoseFrame[] = []
     for (let i = 0; i <= def.samples; i++) {
       const u = i / def.samples
       frames.push({
-        id: this.nextId++,
         time: Math.round(u * def.duration * 1000) / 1000,
-        pose: def.sample(u, ctx),
+        pose: { ...def.sample(u, ctx), shape: this.pose.shape },
         interp: 'linear',
       })
     }
 
     for (const l of LIMBS) {
-      this.limbStyle[l.key] = { ...def.style, ...def.limbStyle?.[l.key] }
+      const st = { ...def.style, ...def.limbStyle?.[l.key] }
+      this.pose.shape[l.key] = { curve: st.curve, bendDeg: st.bendDeg }
+      this.stretch[l.key] = st.stretch
     }
     // Curseurs déliés dès que le preset règle les membres séparément : liés,
     // le panneau n'afficherait que la valeur du premier membre.
     this.styleLinked = def.limbStyle === undefined
     this.depthSort = def.depthSort ?? 'none'
-    this.keyframes = frames
+    this.keyframes = this.keysFromPoses(frames)
     this.keySelection = new Set()
     this.duration = def.duration
     this.loop = def.loop
     this.playing = false
     this.poseDirty = false
+    this.edited.clear()
     this.currentTime = 0
     this.sampleInto(this.pose, 0)
     this.emit()
@@ -909,12 +1235,27 @@ class RigStore {
     this.sampleInto(this.pose, t)
   }
 
+  /** Écrit dans `out` la valeur à l'instant `t` de chaque propriété animée. */
   sampleInto(out: Pose, t: number): void {
-    const kfs = this.keyframes
+    const groups = this.groups
+    for (const id in groups) groups[id].length = 0
+    for (const k of this.keyframes) groups[k.prop]?.push(k)
+    for (const d of PROPS) {
+      const kfs = groups[d.id]
+      if (kfs.length > 0) this.sampleProp(d, kfs, t, out)
+    }
+  }
+
+  /**
+   * Interpolation d'une propriété. La position d'un membre est interpolée en
+   * **polaire** autour de son attache (angle + extension) : entre deux
+   * keyframes, la main décrit un arc au lieu de couper en ligne droite — un
+   * bras qui balance ne se replie donc plus à mi-course.
+   */
+  private sampleProp(d: PropDef, kfs: Keyframe[], t: number, out: Pose): void {
     const n = kfs.length
-    if (n === 0) return
-    if (t <= kfs[0].time) return this.assign(out, kfs[0].pose)
-    if (t >= kfs[n - 1].time) return this.assign(out, kfs[n - 1].pose)
+    if (n === 1 || t <= kfs[0].time) return writeProp(out, d, kfs[0].v)
+    if (t >= kfs[n - 1].time) return writeProp(out, d, kfs[n - 1].v)
 
     // Segment [i, i+1] qui contient t ; une keyframe exactement atteinte
     // appartient au segment qu'elle ouvre (important pour `hold`).
@@ -925,19 +1266,18 @@ class RigStore {
     const h = b.time - a.time
     const f = h > 0 ? (t - a.time) / h : 1
 
-    if (a.interp === 'hold') return this.assign(out, a.pose)
+    if (a.interp === 'hold') return writeProp(out, d, a.v)
 
-    const A = this.chA
-    const B = this.chB
+    const anchor = d.kind === 'limb-pos' ? this.anchors[d.limb!] : null
+    const A = this.load(this.chA, a.v, anchor, null)
+    const B = this.load(this.chB, b.v, anchor, A)
     const O = this.chOut
-    readChannels(a.pose, A)
-    readChannels(b.pose, B)
 
     if (a.interp === 'smooth') {
       const p = kfs[i - 1]
       const nx = kfs[i + 2]
-      if (p) readChannels(p.pose, this.chP)
-      if (nx) readChannels(nx.pose, this.chN)
+      const P = p ? this.load(this.chP, p.v, anchor, A) : null
+      const N = nx ? this.load(this.chN, nx.v, anchor, B) : null
       const s = f
       const s2 = s * s
       const s3 = s2 * s
@@ -945,29 +1285,43 @@ class RigStore {
       const h10 = s3 - 2 * s2 + s
       const h01 = -2 * s3 + 3 * s2
       const h11 = s3 - s2
-      for (let c = 0; c < N_CH; c++) {
+      for (let c = 0; c < d.size; c++) {
         // Aux bornes de l'animation, départ et arrivée à vitesse nulle.
-        const ma = p ? tangent(this.chP[c], A[c], B[c], p.time, a.time, b.time) : 0
-        const mb = nx ? tangent(A[c], B[c], this.chN[c], a.time, b.time, nx.time) : 0
+        const ma = P ? tangent(P[c], A[c], B[c], p.time, a.time, b.time) : 0
+        const mb = N ? tangent(A[c], B[c], N[c], a.time, b.time, nx.time) : 0
         O[c] = h00 * A[c] + h10 * h * ma + h01 * B[c] + h11 * h * mb
       }
     } else {
       const w = a.interp === 'ease' ? easeInOut(f) : f
-      for (let c = 0; c < N_CH; c++) O[c] = lerp(A[c], B[c], w)
+      for (let c = 0; c < d.size; c++) O[c] = lerp(A[c], B[c], w)
     }
-    writeChannels(O, out)
+
+    if (anchor) {
+      const ang = O[0]
+      const dist = O[1]
+      O[0] = anchor.x + Math.sin(ang) * dist
+      O[1] = anchor.y + Math.cos(ang) * dist
+    }
+    writeProp(out, d, O)
   }
 
-  private assign(out: Pose, src: Pose): void {
-    for (const key in out.targets) {
-      const s = src.targets[key]
-      if (s) out.targets[key] = { x: s.x, y: s.y }
+  /**
+   * Charge les valeurs d'une keyframe dans un buffer — en polaire pour une
+   * position de membre, l'angle déroulé au plus près de `ref` (sinon un bras
+   * qui passe de 179° à -179° ferait le tour complet).
+   */
+  private load(buf: Float64Array, v: number[], anchor: Vec | null, ref: Float64Array | null) {
+    if (!anchor) {
+      buf[0] = v[0]
+      buf[1] = v[1] ?? 0
+      return buf
     }
-    out.bodyX = src.bodyX
-    out.bodyY = src.bodyY
-    out.bodyRot = src.bodyRot
-    out.gazeX = src.gazeX
-    out.gazeY = src.gazeY
+    const dx = v[0] - anchor.x
+    const dy = v[1] - anchor.y
+    const ang = Math.atan2(dx, dy)
+    buf[0] = ref ? ref[0] + wrapPi(ang - ref[0]) : ang
+    buf[1] = Math.hypot(dx, dy)
+    return buf
   }
 
   // --- Document (export, ouverture, sauvegarde automatique) ---
@@ -975,15 +1329,21 @@ class RigStore {
     return JSON.stringify(
       {
         format: 'mynd-rig',
-        version: 2,
+        version: 3,
         fps: FPS,
         duration: this.duration,
         loop: this.loop,
         anchors: this.anchors,
-        limbStyle: this.limbStyle,
+        stretch: this.stretch,
         styleLinked: this.styleLinked,
         depthSort: this.depthSort,
-        keyframes: this.keyframes.map((k) => ({ time: k.time, interp: k.interp, pose: k.pose })),
+        pose: this.pose,
+        keyframes: this.keyframes.map((k) => ({
+          prop: k.prop,
+          time: k.time,
+          interp: k.interp,
+          value: k.v,
+        })),
       },
       null,
       2,
@@ -991,9 +1351,11 @@ class RigStore {
   }
 
   /**
-   * Ouvre un document exporté. Accepte l'ancien format (sans interpolation :
-   * les keyframes sont alors `linear`, ce qu'elles étaient). Rejette — sans
-   * rien modifier — un fichier qui n'est pas une animation Mynd.
+   * Ouvre un document exporté. Accepte les anciens formats : version 2 (une
+   * keyframe = une pose complète, découpée ici par propriété) et version 1
+   * (sans interpolation : les keyframes sont alors `linear`, ce qu'elles
+   * étaient). Rejette — sans rien modifier — un fichier qui n'est pas une
+   * animation Mynd.
    *
    * `history: false` pour la restauration au démarrage (rien à annuler).
    */
@@ -1007,19 +1369,23 @@ class RigStore {
     const doc = parseDocument(raw)
     if (!doc) return false
     if (history) this.checkpoint()
-    this.keyframes = doc.keyframes.map((k) => ({ ...k, id: this.nextId++ }))
+    if (doc.anchors) this.anchors = doc.anchors
+    this.pose = doc.pose
+    if (doc.stretch) this.stretch = doc.stretch
+    this.keyframes = doc.keys
+      ? doc.keys.map((k) => ({ ...k, id: this.nextId++ }))
+      : this.keysFromPoses(doc.frames)
     this.sortKeys()
     this.duration = Math.max(MIN_DURATION, doc.duration, this.lastKeyTime)
     this.loop = doc.loop
-    if (doc.anchors) this.anchors = doc.anchors
-    if (doc.limbStyle) this.limbStyle = doc.limbStyle
     this.styleLinked = doc.styleLinked
     this.depthSort = doc.depthSort
     this.keySelection = new Set()
     this.playing = false
     this.poseDirty = false
+    this.edited.clear()
     this.currentTime = 0
-    if (this.keyframes.length > 0) this.sampleInto(this.pose, 0)
+    this.sampleInto(this.pose, 0)
     this.emit()
     return true
   }
@@ -1037,51 +1403,90 @@ function parseVec(v: unknown, fallback: Vec): Vec {
 function parsePose(v: unknown): Pose {
   const o = (v ?? {}) as Partial<Pose>
   const rest = emptyPose()
-  const targets: Record<string, Vec> = {}
-  for (const l of LIMBS) targets[l.key] = parseVec(o.targets?.[l.key], rest.targets[l.key])
-  return {
-    targets,
-    bodyX: num(o.bodyX, 0),
-    bodyY: num(o.bodyY, 0),
-    bodyRot: num(o.bodyRot, 0),
-    gazeX: num(o.gazeX, 0),
-    gazeY: num(o.gazeY, 0),
+  for (const l of LIMBS) {
+    rest.targets[l.key] = parseVec(o.targets?.[l.key], rest.targets[l.key])
+    const s = (o.shape?.[l.key] ?? {}) as Partial<LimbShape>
+    rest.shape[l.key] = { curve: num(s.curve, 1), bendDeg: num(s.bendDeg, 0) }
   }
+  rest.bodyX = num(o.bodyX, 0)
+  rest.bodyY = num(o.bodyY, 0)
+  rest.bodyRot = num(o.bodyRot, 0)
+  rest.gazeX = num(o.gazeX, 0)
+  rest.gazeY = num(o.gazeY, 0)
+  return rest
 }
+
+const parseInterp = (v: unknown): Interp => (INTERPS.includes(v as Interp) ? (v as Interp) : 'linear')
 
 function parseDocument(raw: unknown) {
   if (!raw || typeof raw !== 'object') return null
   const o = raw as Record<string, unknown>
   if (!Array.isArray(o.keyframes)) return null
-  const keyframes = o.keyframes.map((k: unknown) => {
-    const kk = (k ?? {}) as Record<string, unknown>
-    const interp = INTERPS.includes(kk.interp as Interp) ? (kk.interp as Interp) : 'linear'
-    return { time: Math.max(0, num(kk.time, 0)), interp, pose: parsePose(kk.pose) }
-  })
+
   let anchors: Anchors | null = null
   if (o.anchors && typeof o.anchors === 'object') {
     anchors = {}
     for (const l of LIMBS) anchors[l.key] = parseVec((o.anchors as Anchors)[l.key], l.anchor)
   }
-  let limbStyle: Record<string, LimbStyle> | null = null
-  if (o.limbStyle && typeof o.limbStyle === 'object') {
-    limbStyle = {}
-    for (const l of LIMBS) {
-      const s = ((o.limbStyle as Record<string, Partial<LimbStyle>>)[l.key] ?? {}) as Partial<LimbStyle>
-      limbStyle[l.key] = {
-        curve: num(s.curve, 1),
-        bendDeg: num(s.bendDeg, 0),
-        stretch: s.stretch === true,
+
+  let pose: Pose
+  let stretch: Record<string, boolean> | null = null
+  let keys: Omit<Keyframe, 'id'>[] | null = null
+  let frames: PoseFrame[] = []
+
+  if (num(o.version, 1) >= 3) {
+    // Une keyframe par propriété ; la pose porte les valeurs non animées.
+    pose = parsePose(o.pose)
+    if (o.stretch && typeof o.stretch === 'object') {
+      const st = o.stretch as Record<string, unknown>
+      stretch = Object.fromEntries(LIMBS.map((l) => [l.key, st[l.key] === true]))
+    }
+    keys = []
+    for (const k of o.keyframes as unknown[]) {
+      const kk = (k ?? {}) as Record<string, unknown>
+      const d = PROP_BY_ID[kk.prop as string]
+      const value = kk.value
+      if (!d || !Array.isArray(value) || value.length !== d.size) continue
+      if (!value.every((x) => typeof x === 'number' && Number.isFinite(x))) continue
+      keys.push({
+        prop: d.id,
+        time: Math.max(0, num(kk.time, 0)),
+        interp: parseInterp(kk.interp),
+        v: value as number[],
+      })
+    }
+  } else {
+    // Ancien format : une keyframe = une pose complète, forme des membres en
+    // réglage (`limbStyle`).
+    pose = emptyPose()
+    if (o.limbStyle && typeof o.limbStyle === 'object') {
+      stretch = {}
+      for (const l of LIMBS) {
+        const s = ((o.limbStyle as Record<string, Partial<LimbStyle>>)[l.key] ?? {}) as Partial<LimbStyle>
+        pose.shape[l.key] = { curve: num(s.curve, 1), bendDeg: num(s.bendDeg, 0) }
+        stretch[l.key] = s.stretch === true
       }
     }
+    frames = (o.keyframes as unknown[]).map((k) => {
+      const kk = (k ?? {}) as Record<string, unknown>
+      return {
+        time: Math.max(0, num(kk.time, 0)),
+        interp: parseInterp(kk.interp),
+        pose: parsePose(kk.pose),
+      }
+    })
+    frames.sort((a, b) => a.time - b.time)
   }
+
   const ds = o.depthSort
   return {
-    keyframes,
+    keys,
+    frames,
+    pose,
+    stretch,
     duration: num(o.duration, 4),
     loop: o.loop !== false,
     anchors,
-    limbStyle,
     styleLinked: o.styleLinked !== false,
     depthSort: (ds === 'legs' || ds === 'all' ? ds : 'none') as DepthSort | 'none',
   }

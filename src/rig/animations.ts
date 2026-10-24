@@ -50,7 +50,10 @@ export interface SampleCtx {
 /** Paires de membres triées par profondeur au rendu (voir `AnimationDef`). */
 export type DepthSort = 'legs' | 'all'
 
-/** Réglages d'articulation d'un membre (config, non animée par la timeline). */
+/**
+ * Réglages d'articulation d'un membre. Dans le store, `curve` / `bendDeg` sont
+ * la forme (animable, `Pose.shape`) et `stretch` un réglage (`rigStore.stretch`).
+ */
 export interface LimbStyle {
   curve: number
   bendDeg: number

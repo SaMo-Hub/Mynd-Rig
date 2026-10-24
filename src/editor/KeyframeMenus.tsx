@@ -44,12 +44,29 @@ export const INTERP_META: Record<
  * linéaire, sablier = ralenti, carré = maintien. La forme porte l'information,
  * la couleur ne dit que la sélection.
  */
-export function KeyGlyph({ interp, selected }: { interp: Interp; selected: boolean }) {
+export function KeyGlyph({
+  interp,
+  selected,
+  small = false,
+}: {
+  /** `null` : repère qui regroupe des interpolations différentes. */
+  interp: Interp | null
+  selected: boolean
+  /** Ligne de propriété : repère plus petit, la ligne d'élément reste dominante. */
+  small?: boolean
+}) {
   const cls = selected
     ? 'fill-star stroke-ink'
     : 'fill-ink-blue stroke-surface-elevated'
   return (
-    <svg viewBox="0 0 16 16" aria-hidden className={'h-4 w-4 overflow-visible ' + cls} strokeWidth={1.5} strokeLinejoin="round">
+    <svg
+      viewBox="0 0 16 16"
+      aria-hidden
+      className={(small ? 'h-3 w-3 ' : 'h-4 w-4 ') + 'overflow-visible ' + cls}
+      strokeWidth={1.5}
+      strokeLinejoin="round"
+    >
+      {interp === null && <circle cx="8" cy="8" r="4" />}
       {interp === 'smooth' && <circle cx="8" cy="8" r="5.5" />}
       {interp === 'linear' && <path d="M8 1.5 14.5 8 8 14.5 1.5 8Z" />}
       {interp === 'ease' && <path d="M2 2.5 8 8 2 13.5ZM14 2.5 8 8 14 13.5Z" />}
@@ -121,8 +138,12 @@ export interface ContextMenuState {
   y: number
   /** instant sous le pointeur (insertion, collage). */
   time: number
-  /** keyframe sous le pointeur, ou `null` pour la piste vide. */
-  keyId: number | null
+  /** keyframes du repère sous le pointeur, ou `null` pour la piste vide. */
+  keyIds: number[] | null
+  /** propriétés de la ligne visée (insertion) ; absent = tout ce qui est animé. */
+  props?: string[]
+  /** nom de la ligne visée. */
+  rowLabel: string
   /** ouvert au doigt : le menu se place au-dessus, pour ne pas être caché par lui. */
   touch?: boolean
 }
@@ -186,16 +207,16 @@ export function TrackContextMenu({
     <MenuSurface
       menuRef={rootRef}
       entered={entered}
-      label={state.keyId !== null ? 'Keyframe' : 'Timeline'}
+      label={state.keyIds !== null ? 'Keyframe' : 'Timeline'}
       className="fixed w-72"
       style={{ left: pos.left, top: pos.top, transformOrigin: pos.origin }}
     >
-      {state.keyId !== null ? (
+      {state.keyIds !== null ? (
         <>
           <MenuItem
             icon={IconKeyframe}
             label="Aller à la keyframe"
-            onSelect={run(() => rig.goToKeyframe(state.keyId!))}
+            onSelect={run(() => rig.goToKeyframe(state.keyIds![0]))}
           />
           <MenuSeparator />
           <MenuLabel>Interpolation</MenuLabel>
@@ -238,8 +259,8 @@ export function TrackContextMenu({
           <MenuItem
             icon={IconKeyAdd}
             label="Insérer une keyframe ici"
-            description="Reprend la pose de l’animation à cet instant"
-            onSelect={run(() => rig.insertKeyframeAt(state.time))}
+            description={`${state.rowLabel} — reprend la valeur de l’animation à cet instant`}
+            onSelect={run(() => rig.insertKeyframeAt(state.time, state.props))}
           />
           <MenuItem
             icon={IconPaste}

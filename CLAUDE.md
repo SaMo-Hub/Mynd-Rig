@@ -50,10 +50,16 @@ L'app est un **éditeur de rig + animation** (poser, rigger, timeline, export).
   (256×279, = viewBox de `mascot-final.svg`). Les membres sont à **2 os (IK)**.
 - `src/editor/rigStore.ts` — store d'état vanilla (singleton `rigStore`). Modèle de
   pose **basé sur la cible d'extrémité** (main/pied en coords locales), pas sur des
-  rotations. Contient aussi anchors, keyframes, lecture, interpolation, historique,
-  export / ouverture JSON. Pixi lit la pose en direct ; React ne s'abonne qu'aux
+  rotations. Contient aussi anchors, keyframes (une par **propriété**, voir
+  `tracks.ts`), lecture, interpolation, historique, export / ouverture JSON. Pixi lit la pose en direct ; React ne s'abonne qu'aux
   changements structurels (via `src/editor/useRig.ts` + `useSyncExternalStore`).
   Exposé sur `window.__rig` en dev. Voir « Timeline et keyframes » plus bas.
+- `src/editor/tracks.ts` — les **pistes**, modèle After Effects : des éléments
+  (`ELEMENTS` : Corps, Regard, les 4 membres) qui regroupent des propriétés
+  (`PROPS`, id `<élément>.<propriété>` : `body.pos`, `body.rot`, `gaze.pos`,
+  `<membre>.pos`, `<membre>.curve`, `<membre>.bend`). `readProp` / `writeProp`
+  font le lien avec `Pose`. `primary` = ce qu'enregistre une keyframe « de
+  pose » sur un élément pas encore animé (sa position, pas sa forme).
 - `src/editor/RigCanvas.tsx` — rendu Pixi. Membres **procéduraux** : `solveIK`
   (2 os égaux) place le genou/coude, dessiné en capsule à jointure arrondie
   (`stroke` cap/join `round`, couleur unie = SVG d'origine). Corps + visage =
@@ -96,15 +102,27 @@ L'app est un **éditeur de rig + animation** (poser, rigger, timeline, export).
   procédural. Avertit quand des keyframes existent (le chargement les remplace).
   Il s'ouvre **vers le haut** : son bouton vit dans la capsule flottante en bas
   de la scène, qui est en `overflow-hidden`.
-- `src/editor/ArticulationPanel.tsx` — panneau latéral de réglage du pliage :
-  **Rondeur** (`limbStyle.curve`, module la hauteur du bombement) et **Rotation
-  du pli** (`limbStyle.bendDeg`, tourne la direction de courbure ; plage 0…180°,
-  0° = pli naturel, 90° = bombement annulé — la perpendiculaire devient
-  colinéaire à l'axe attache→extrémité —, 180° = pli inversé) et case
-  **Autoriser l'étirement** (`limbStyle.stretch` : sans, la portée est bornée à
-  2 segments ; avec, le membre s'allonge pour atteindre la cible). Par défaut lié
+- `src/editor/ArticulationPanel.tsx` — panneau latéral. Forme des membres :
+  **Rondeur** (`pose.shape[k].curve`, module la hauteur du bombement) et
+  **Rotation du pli** (`pose.shape[k].bendDeg`, tourne la direction de
+  courbure ; plage 0…180°, 0° = pli naturel, 90° = bombement annulé — la
+  perpendiculaire devient colinéaire à l'axe attache→extrémité —, 180° = pli
+  inversé), toutes deux **animables** ; case **Autoriser l'étirement**
+  (`rigStore.stretch[k]`, réglage non animé : sans, la portée est bornée à 2
+  segments ; avec, le membre s'allonge pour atteindre la cible). Par défaut lié
   (les 4 membres via `setAllStyle`, `styleLinked`), dépliable par membre
-  (`setLimbStyle`). Ces réglages sont de la config (non animée par la timeline).
+  (`setLimbStyle`, qui délie ; `applyStyleToAll(key)` recopie et relie).
+  **Élément sélectionné** (`rigStore.selected` : poignée d'un membre, disque du
+  corps, pastille du regard, nom d'une piste ou d'une carte « Séparés ») → le
+  panneau ne montre plus que ses propriétés, avec « Vue d'ensemble » pour
+  revenir (ou Échap, ou un clic dans le vide). Membre : **Rotation**
+  (`setLimbAngle`, tourne l'extrémité autour de l'attache sans changer son
+  extension — c'est donc la propriété `pos` qu'elle écrit) + forme. Corps :
+  **Rotation** (`setBodyRotDeg`). Chaque propriété animable porte un
+  **`KeyToggle`** (`src/editor/KeyToggle.tsx`, le losange du chronomètre
+  d'After Effects : plein = keyframe au playhead, contour = animée, pâle = non
+  animée ; clic = `toggleKeysAtPlayhead`). Le panneau se rafraîchit à ~15 i/s
+  pendant la lecture : le store n'émet rien pendant qu'elle tourne.
 
 - **Pupilles** : `mascot-body.svg` ne contient plus que le blanc des yeux ; les
   pupilles (`pupil.svg`, disque + étincelles recentrés) sont 2 sprites mobiles
@@ -118,10 +136,12 @@ L'app est un **éditeur de rig + animation** (poser, rigger, timeline, export).
 Quatre presets — **Repos**, **Marche**, **Course**, **Saut** — définis comme des
 **fonctions** `sample(t, ctx)` et non comme des keyframes figées : les cycles
 sont bouclés par construction et les amplitudes se règlent en un chiffre.
-`rigStore.loadAnimation(def)` les échantillonne en `samples + 1` keyframes
-éditables en interpolation `linear` (la fluidité vient de la densité), applique
-le `style` d'articulation du preset et remplace les keyframes existantes —
-annulable comme tout le reste.
+`rigStore.loadAnimation(def)` les échantillonne en `samples + 1` poses,
+découpées en keyframes **par propriété** (`keysFromPoses`) en interpolation
+`linear` (la fluidité vient de la densité) — une propriété qui ne bouge pas
+n'est pas animée, elle prend juste sa valeur. Le `style` du preset est posé en
+valeur fixe de la forme (pas de keyframes de rondeur). Remplace les keyframes
+existantes — annulable comme tout le reste.
 
 Conventions du modèle (invariants à respecter si on ajoute une animation) :
 
@@ -203,10 +223,31 @@ Comportements clés :
 
 Tout vit dans `rigStore` ; les composants ne font qu'appeler ses méthodes.
 
+- **Une keyframe = une propriété** (`Keyframe.prop`, `v` = ses valeurs), comme
+  dans After Effects : un bras peut partir avant une jambe, la rondeur s'animer
+  sans la position. Une propriété **sans** keyframe n'est pas animée : sa valeur
+  vit dans `pose` et `sampleInto` n'y touche pas (c'est ce qui laisse la forme
+  être un simple réglage tant qu'on ne l'anime pas). `keyframes` reste un
+  tableau plat trié par temps ; `sampleInto` le regroupe par propriété.
+- **La position d'un membre s'interpole en polaire** autour de son attache
+  (angle déroulé au plus court + extension) : la main décrit un arc. En
+  cartésien, un bras tendu qui balance se repliait à mi-course.
 - **Grille d'images** : `FPS = 24`. Keyframes posées, déplacées, collées et
   playhead manipulé sont calés sur `snapToFrame` ; la lecture reste continue.
-  Deux keyframes à moins d'une demi-image sont **la même** : une keyframe
-  déplacée ou collée sur une autre la remplace (`mergeSelected`).
+  Deux keyframes **d'une même propriété** à moins d'une demi-image sont **la
+  même** : une keyframe déplacée ou collée sur une autre la remplace
+  (`mergeSelected`).
+- **Touche K / bouton Keyframe** (`addKeyframe`) : enregistre ce qui a été
+  modifié depuis le dernier déplacement du playhead (`edited`) ; sans
+  modification, les propriétés déjà animées de l'élément sélectionné (ou de
+  tout le personnage), à défaut sa pose (`primary`).
+- **Décalage en boucle** (`wrapPlan` / `applyWrap`) : en lecture en boucle,
+  glisser (ou ⌥←→) des pistes **entières** qui sont des cycles fermés (keyframe
+  à 0 et à la fin, même valeur) fait **tourner le cycle** — ce qui sort par la
+  fin rentre par le début, une keyframe de début est posée à la valeur
+  d'origine. Sans ça, les keyframes d'un preset occupent toute la durée et ne
+  peuvent pas bouger. Une rafale de flèches = un seul décalage (`nudgeWrap`),
+  sinon chaque appui ajoutait une keyframe.
 - **Interpolation par keyframe** (`interp`, segment qui *part* de la keyframe) :
   `smooth` (défaut des keyframes posées à la main : Hermite à tangentes
   Catmull-Rom, annulées aux extrêmes et bridées façon Fritsch-Carlson → **pas de
@@ -214,11 +255,12 @@ Tout vit dans `rigStore` ; les composants ne font qu'appeler ses méthodes.
   clamperait en silence), `linear` (presets, anciens exports), `ease`, `hold`.
   Forme du repère dans la piste = convention After Effects (cercle, losange,
   sablier, carré) ; la couleur ne dit que la sélection.
-- **Auto-keyframe** (`autoKey`, touche N) : toute édition de la pose passe par
-  `poseEdited()`, qui écrit la keyframe au playhead. Hors auto-key, une pose
-  modifiée alors que des keyframes existent est `poseDirty` (pastille sur le
-  bouton Keyframe + indice de scène) : le prochain déplacement du playhead la
-  perdrait. Le regard qui **suit le curseur** passe par `followGazeTo`, qui
+- **Auto-keyframe** (`autoKey`, touche N) : toute édition passe par
+  `poseEdited(props)`, qui écrit une keyframe par propriété touchée au playhead
+  (déplacer le corps touche aussi la position des pieds épinglés). Hors
+  auto-key, modifier une propriété **animée** rend la pose `poseDirty`
+  (pastille sur le bouton Keyframe + indice de scène) : le prochain
+  déplacement du playhead la perdrait. Le regard qui **suit le curseur** passe par `followGazeTo`, qui
   n'est pas une édition — sinon le survol remplirait la timeline.
 - **Historique** : `checkpoint(tag?)` **avant** chaque modification du document
   (même tag rapproché = un seul pas : curseurs, flèches). Un glissé sur la scène
@@ -228,11 +270,21 @@ Tout vit dans `rigStore` ; les composants ne font qu'appeler ses méthodes.
   checkpoint.
 - **Durée** : sans « Étirer », elle ne descend pas sous la dernière keyframe
   (rien n'est coupé en silence) ; avec, les keyframes suivent à l'échelle.
-- **Piste** : la règle (haut) sert à parcourir le temps, le couloir (bas) aux
-  keyframes — clic, ⇧/⌘+clic, glisser (Alt = dupliquer), lasso, clic droit ou
-  appui long (le menu s'ouvre alors **au-dessus** du doigt et le clic de
-  relâchement est avalé, sinon il le refermait). Zoom : ⌘/Ctrl + molette,
-  plafonné à `MAX_FRAME_PX` par image.
+- **Piste** : la règle (haut) sert à parcourir le temps, les lignes (dessous)
+  aux keyframes — une ligne par élément, dépliable en propriétés (chevron), ou
+  une seule ligne « Toutes » quand les pistes sont repliées (bouton
+  « Pistes », mémorisé ; repliées par défaut sous 820 px de haut, sinon elles
+  mangent la scène). Un repère d'élément regroupe les keyframes de ses
+  propriétés au même instant et les déplace ensemble. Gestes : clic, ⇧/⌘+clic,
+  glisser (Alt = dupliquer), lasso **sur plusieurs lignes**, clic dans le vide
+  = sélectionne l'élément de la ligne, clic droit ou appui long (le menu
+  s'ouvre alors **au-dessus** du doigt et le clic de relâchement est avalé,
+  sinon il le refermait). ⚠️ Les gestes sont **capturés par le conteneur des
+  lignes**, pas par le repère : pendant un glissé les repères se regroupent et
+  se re-créent, et un élément démonté perdrait la capture. Les noms de pistes
+  (`LABEL_W`) sont `sticky` à gauche, la règle `sticky` en haut ; la tête du
+  playhead est dans la règle (`knobRef`), sa ligne dans les pistes. Zoom :
+  ⌘/Ctrl + molette, plafonné à `MAX_FRAME_PX` par image.
 - **L'en-tête de la timeline tient sur une ligne à hauteur fixe** : il change de
   contenu avec la sélection, et s'il passait sur deux lignes la scène se
   redimensionnerait à chaque clic. Les commandes secondaires se replient par
@@ -243,10 +295,14 @@ Tout vit dans `rigStore` ; les composants ne font qu'appeler ses méthodes.
 - **`NumberField` valide au blur / Entrée** (Échap annule), les flèches tout de
   suite : appliquée à chaque frappe, « 25 » passait par « 2 » et une valeur
   intermédiaire suffisait à bouger ou fusionner des keyframes.
-- **Format d'export** : `{ format: 'mynd-rig', version: 2, fps, duration, loop,
-  anchors, limbStyle, styleLinked, depthSort, keyframes: [{ time, interp, pose }] }`.
-  `loadJSON` accepte l'ancien format (sans `interp` → `linear`) et refuse sans
-  rien toucher ce qui n'est pas une animation.
+- **Format d'export** : `{ format: 'mynd-rig', version: 3, fps, duration, loop,
+  anchors, stretch, styleLinked, depthSort, pose, keyframes: [{ prop, time,
+  interp, value }] }` — `pose` porte les valeurs des propriétés non animées
+  (dont `shape`, la forme des membres), `value` est un tableau (`[x, y]` ou
+  `[n]`). `loadJSON` accepte les anciens formats : version 2 (une keyframe =
+  une pose complète, `limbStyle` en réglage) est découpée par propriété ;
+  version 1 (sans `interp` → `linear`). Il refuse sans rien toucher ce qui
+  n'est pas une animation.
 
 ## Design system — partagé avec l'app iOS
 

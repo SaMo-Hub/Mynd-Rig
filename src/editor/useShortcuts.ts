@@ -18,7 +18,7 @@ export const SHORTCUTS: { keys: string; label: string }[] = [
   { keys: '← →', label: 'Image précédente / suivante (⇧ : 10 images)' },
   { keys: '⇧← ⇧→', label: 'Keyframe précédente / suivante' },
   { keys: 'Début Fin', label: 'Aller au début / à la fin' },
-  { keys: 'K', label: 'Enregistrer la pose en keyframe' },
+  { keys: 'K', label: 'Keyframe sur ce qui a changé (sinon l’élément sélectionné)' },
   { keys: 'N', label: 'Activer / couper l’auto-keyframe' },
   { keys: '⌥← ⌥→', label: 'Décaler la sélection d’une image (⇧ : 10)' },
   { keys: '⌫', label: 'Supprimer la sélection' },
@@ -104,6 +104,7 @@ export function useShortcuts(): void {
             break
           case 'Escape':
             r.clearKeySelection()
+            r.select(null)
             break
           default:
             handled = false
